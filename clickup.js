@@ -46,76 +46,36 @@ function mapTask(task) {
 }
 
 export async function fetchActiveRoster(listId) {
-  const id = listId || process.env.CLICKUP_LIST_ID;
-  if (!id) throw new Error('CLICKUP_LIST_ID is not set');
+  // Supports one OR many list IDs (comma-separated in CLICKUP_LIST_ID).
+  // Needed because some people live in another list (e.g. Candidate Tracking
+  // List) but appear in the Masterlist view via ClickUp "tasks in multiple lists".
+  const raw = listId || process.env.CLICKUP_LIST_ID;
+  if (!raw) throw new Error('CLICKUP_LIST_ID is not set');
+  const listIds = String(raw).split(',').map(s => s.trim()).filter(Boolean);
 
-  // ---- Pass 1: get all top-level tasks from the list (paginated) ----
-  const top = [];
-  let page = 0;
-  while (page < 60) {
-    const url = new URL(`${CLICKUP_API}/list/${id}/task`);
-    url.searchParams.set('page', String(page));
-    url.searchParams.set('subtasks', 'true');
-    url.searchParams.set('include_closed', 'true');
-    url.searchParams.set('archived', 'false');
-    const res = await fetch(url, { headers: headers() });
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`ClickUp ${res.status}: ${body.slice(0, 300)}`);
-    }
-    const data = await res.json();
-    const tasks = data.tasks || [];
-    top.push(...tasks);
-    if (data.last_page || tasks.length === 0) break;
-    page++;
-  }
-
-  // Collect everything we have so far, keyed by id.
   const byId = new Map();
-  for (const t of top) byId.set(t.id, t);
 
-  // ---- Pass 2: for every task, fetch its full detail incl. subtasks ----
-  // The list endpoint drops subtasks whose parent's own filters differ, so we
-  // expand each parent directly. We only need to do this for parents (no .parent).
-  const parents = top.filter(t => !t.parent);
-  const concurrency = 5;
-  for (let i = 0; i < parents.length; i += concurrency) {
-    const batch = parents.slice(i, i + concurrency);
-    const results = await Promise.all(batch.map(async (p) => {
-      try {
-        const u = new URL(`${CLICKUP_API}/task/${p.id}`);
-        u.searchParams.set('include_subtasks', 'true');
-        const r = await fetch(u, { headers: headers() });
-        if (!r.ok) return [];
-        const d = await r.json();
-        return d.subtasks || [];
-      } catch { return []; }
-    }));
-    for (const subs of results) {
-      for (const sub of subs) {
-        if (!byId.has(sub.id)) byId.set(sub.id, sub);
+  for (const id of listIds) {
+    let page = 0;
+    while (page < 60) {
+      const url = new URL(`${CLICKUP_API}/list/${id}/task`);
+      url.searchParams.set('page', String(page));
+      url.searchParams.set('subtasks', 'true');
+      url.searchParams.set('include_closed', 'true');
+      url.searchParams.set('archived', 'false');
+      const res = await fetch(url, { headers: headers() });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`ClickUp ${res.status} (list ${id}): ${body.slice(0, 200)}`);
       }
+      const data = await res.json();
+      const tasks = data.tasks || [];
+      for (const t of tasks) if (!byId.has(t.id)) byId.set(t.id, t);
+      if (data.last_page || tasks.length === 0) break;
+      page++;
     }
   }
 
-  // Subtasks from the /task detail endpoint are lightweight (no custom_fields).
-  // Fetch full detail for any subtask we discovered that lacks custom fields.
-  const needsDetail = [...byId.values()].filter(t => t.parent && !t.custom_fields);
-  for (let i = 0; i < needsDetail.length; i += concurrency) {
-    const batch = needsDetail.slice(i, i + concurrency);
-    const results = await Promise.all(batch.map(async (t) => {
-      try {
-        const r = await fetch(`${CLICKUP_API}/task/${t.id}`, { headers: headers() });
-        if (!r.ok) return null;
-        return await r.json();
-      } catch { return null; }
-    }));
-    for (const full of results) {
-      if (full && full.id) byId.set(full.id, full);
-    }
-  }
-
-  // ---- Filter to active status, map, de-dupe ----
   const active = [];
   for (const t of byId.values()) {
     const status = (t.status?.status || '').toLowerCase();
