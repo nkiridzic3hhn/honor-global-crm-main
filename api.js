@@ -5,6 +5,7 @@ import xlsx from 'xlsx';
 import { q } from './pool.js';
 import { runSync, syncStatus } from './sync.js';
 import { runDiagnostics } from './diag.js';
+import { importClassificationsFromBuffer } from './import_csv.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -113,6 +114,15 @@ router.get('/names', async (req, res) => {
     const rows = await q(`SELECT clickup_id, name FROM hires WHERE active=TRUE ORDER BY name`);
     res.json({ count: rows.length, people: rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- One-time CSV import of buckets/savings ----
+router.post('/import', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'no file' });
+    const summary = await importClassificationsFromBuffer(req.file.buffer);
+    res.json(summary);
+  } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
 
 export default router;

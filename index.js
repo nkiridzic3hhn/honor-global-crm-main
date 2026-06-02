@@ -27,6 +27,7 @@ app.use(async (req, res, next) => {
 
 // Serve the dashboard (dashboard.html sits next to this file).
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
+app.get('/import.html', (req, res) => res.sendFile(path.join(__dirname, 'import.html')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
 
 async function boot() {
