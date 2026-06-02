@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS settings (
   weeks_per_year  NUMERIC DEFAULT 52,
   CHECK (id = 1)
 );
+CREATE TABLE IF NOT EXISTS activity_log (
+  id        SERIAL PRIMARY KEY,
+  ts        TIMESTAMPTZ DEFAULT now(),
+  type      TEXT NOT NULL,
+  message   TEXT NOT NULL,
+  detail    JSONB
+);
 INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 ALTER TABLE classifications ADD COLUMN IF NOT EXISTS kpis TEXT;
 ALTER TABLE classifications ADD COLUMN IF NOT EXISTS role_description TEXT;

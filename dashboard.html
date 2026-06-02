@@ -107,11 +107,11 @@ function render(){
       <div><div class="ttl">Honor Global · Workforce Cost & Savings</div><div class="sub">Live from ClickUp</div></div>
       <div class="spacer"></div><div class="sync" id="syncTxt"></div>
       <button class="btn" id="syncBtn">⟳ Sync now</button></div>
-    <div class="tabs">${['overview|Overview','buckets|Buckets & Savings','payroll|Payroll','settings|Settings'].map(x=>{const[k,l]=x.split('|');return `<div class="tab ${tab===k?'on':''}" data-tab="${k}">${l}</div>`}).join('')}</div>
+    <div class="tabs">${['overview|Overview','buckets|Buckets & Savings','payroll|Payroll','logs|Logs','settings|Settings'].map(x=>{const[k,l]=x.split('|');return `<div class="tab ${tab===k?'on':''}" data-tab="${k}">${l}</div>`}).join('')}</div>
     <div class="body" id="body"></div>`;
   $('#syncBtn').onclick=async()=>{$('#syncBtn').textContent='⟳ Syncing…';await api('/sync',{method:'POST'});await refresh();render();toast('Synced from ClickUp');};
   document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{tab=t.dataset.tab;openRow=null;render();});
-  ({overview:ovw,buckets:bks,payroll:pay,settings:sett}[tab])();
+  ({overview:ovw,buckets:bks,payroll:pay,logs:logsTab,settings:sett}[tab])();
   api('/sync/status').then(s=>{if($('#syncTxt')&&s.lastSync)$('#syncTxt').textContent='● Live · '+roster.length+' active';});
 }
 
@@ -296,6 +296,25 @@ function weekCard(w,idx){
       <button class="btn sm" data-del="${escAttr(w.period)}" style="margin-top:10px">Delete week</button>
     `:''}
   </div>`;
+}
+
+function logsTab(){
+  const b=$('#body');
+  b.innerHTML=`<div class="note">Activity log — ClickUp adds/removes, pay-rate changes, and payroll uploads. Newest first.</div>
+    <div class="chips" id="logChips"></div>
+    <div id="logList"><div class="empty">Loading…</div></div>`;
+  const types=[['all','All'],['sync_add','Added'],['sync_remove','Removed'],['rate_change','Rate change'],['payroll_upload','Payroll upload'],['payroll_delete','Payroll delete']];
+  if(!window._logType) window._logType='all';
+  $('#logChips').innerHTML=types.map(([k,l])=>`<div class="chip ${window._logType===k?'on':''}" data-lt="${k}">${l}</div>`).join('');
+  document.querySelectorAll('[data-lt]').forEach(c=>c.onclick=()=>{window._logType=c.dataset.lt;logsTab();});
+  const color={sync_add:'#6ee7b0',sync_remove:'#ff9bac',rate_change:'#e0a82e',payroll_upload:'#7fe3f0',payroll_delete:'#ff9bac'};
+  api('/logs'+(window._logType&&window._logType!=='all'?'?type='+window._logType:'')).then(rows=>{
+    if(!Array.isArray(rows)||!rows.length){$('#logList').innerHTML='<div class="empty">No activity yet.</div>';return;}
+    $('#logList').innerHTML='<div class="card">'+rows.map(r=>{
+      const dt=new Date(r.ts);const when=dt.toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+      return `<div class="li"><span><span class="bdg" style="background:#1d212b;color:${color[r.type]||'#969cab'};margin-right:8px">${r.type.replace('_',' ')}</span>${esc(r.message)}</span><span style="color:var(--mut2);font-size:11px;white-space:nowrap">${when}</span></div>`;
+    }).join('')+'</div>';
+  }).catch(()=>{$('#logList').innerHTML='<div class="empty">Could not load logs.</div>';});
 }
 
 function sett(){

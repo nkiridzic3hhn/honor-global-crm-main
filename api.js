@@ -5,6 +5,7 @@ import xlsx from 'xlsx';
 import { q } from './pool.js';
 import { runSync, syncStatus } from './sync.js';
 import { runDiagnostics } from './diag.js';
+import { logEvent } from './log.js';
 import { importClassificationsFromBuffer } from './import_csv.js';
 
 const router = express.Router();
@@ -126,12 +127,13 @@ router.post('/payroll/upload', upload.single('file'), async (req, res) => {
        ON CONFLICT (period) DO UPDATE SET week_ending=$2, total=$3, items=$4, agency_totals=$5, notes=$6, posted_at=now()`,
       [period, weekEnding, total, JSON.stringify(items), JSON.stringify(agencyTotals), req.body.notes || null]
     );
+    await logEvent('payroll_upload', `Payroll uploaded: ${period} — ${items.length} people, $${total.toFixed(2)}`, { period, total, count: items.length });
     res.json({ ok: true, period, week_ending: weekEnding, total, count: items.length, agencies: agencyTotals.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 router.delete('/payroll/:period', async (req, res) => {
-  try { await q(`DELETE FROM payroll_weeks WHERE period=$1`, [decodeURIComponent(req.params.period)]); res.json({ ok: true }); }
+  try { const p=decodeURIComponent(req.params.period); await q(`DELETE FROM payroll_weeks WHERE period=$1`, [p]); await logEvent('payroll_delete', `Payroll week deleted: ${p}`, { period: p }); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -172,6 +174,17 @@ router.post('/import', upload.single('file'), async (req, res) => {
     const summary = await importClassificationsFromBuffer(req.file.buffer);
     res.json(summary);
   } catch (e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
+// ---- Activity log ----
+router.get('/logs', async (req, res) => {
+  try {
+    const type = req.query.type;
+    const rows = type && type !== 'all'
+      ? await q(`SELECT * FROM activity_log WHERE type=$1 ORDER BY ts DESC LIMIT 500`, [type])
+      : await q(`SELECT * FROM activity_log ORDER BY ts DESC LIMIT 500`);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 export default router;
