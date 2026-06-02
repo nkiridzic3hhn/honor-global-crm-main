@@ -4,6 +4,7 @@ import multer from 'multer';
 import xlsx from 'xlsx';
 import { q } from './pool.js';
 import { runSync, syncStatus } from './sync.js';
+import { runDiagnostics } from './diag.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -99,5 +100,11 @@ router.put('/settings', async (req, res) => {
 
 router.post('/sync', async (req, res) => { res.json(await runSync()); });
 router.get('/sync/status', (req, res) => res.json(syncStatus()));
+
+// ---- Diagnostics (temporary) — visit /api/diag to see headcount by strategy ----
+router.get('/diag', async (req, res) => {
+  try { res.json(await runDiagnostics()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 export default router;
