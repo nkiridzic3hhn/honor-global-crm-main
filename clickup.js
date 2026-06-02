@@ -46,16 +46,21 @@ function mapTask(task) {
 }
 
 export async function fetchActiveRoster(listId) {
-  // Supports one OR many list IDs (comma-separated in CLICKUP_LIST_ID).
-  // Needed because some people live in another list (e.g. Candidate Tracking
-  // List) but appear in the Masterlist view via ClickUp "tasks in multiple lists".
-  const raw = listId || process.env.CLICKUP_LIST_ID;
-  if (!raw) throw new Error('CLICKUP_LIST_ID is not set');
-  const listIds = String(raw).split(',').map(s => s.trim()).filter(Boolean);
+  // We want everyone who APPEARS IN the primary list's view — that includes
+  // tasks whose home is the primary list, plus tasks linked in from other lists
+  // (ClickUp "tasks in multiple lists"). The /list/{id}/task endpoint only
+  // returns home-list tasks, so we also scan extra lists and keep a task only
+  // if the primary list shows up in its `locations`.
+  //
+  // CLICKUP_LIST_ID = primary list (the one whose view you trust, e.g. Masterlist)
+  // CLICKUP_EXTRA_LIST_IDS = comma-separated other lists to scan for linked tasks
+  const primary = String(listId || process.env.CLICKUP_LIST_ID || '').trim();
+  if (!primary) throw new Error('CLICKUP_LIST_ID is not set');
+  const extras = String(process.env.CLICKUP_EXTRA_LIST_IDS || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
 
-  const byId = new Map();
-
-  for (const id of listIds) {
+  async function pull(id) {
+    const out = [];
     let page = 0;
     while (page < 60) {
       const url = new URL(`${CLICKUP_API}/list/${id}/task`);
@@ -70,9 +75,29 @@ export async function fetchActiveRoster(listId) {
       }
       const data = await res.json();
       const tasks = data.tasks || [];
-      for (const t of tasks) if (!byId.has(t.id)) byId.set(t.id, t);
+      out.push(...tasks);
       if (data.last_page || tasks.length === 0) break;
       page++;
+    }
+    return out;
+  }
+
+  // Does this task appear in the primary list? (home list OR a linked location)
+  function inPrimary(t) {
+    if (t.list?.id === primary) return true;
+    if (Array.isArray(t.locations) && t.locations.some(l => l.id === primary)) return true;
+    return false;
+  }
+
+  const byId = new Map();
+
+  // Primary list: keep all its tasks.
+  for (const t of await pull(primary)) byId.set(t.id, t);
+
+  // Extra lists: keep ONLY tasks that are also linked into the primary list.
+  for (const id of extras) {
+    for (const t of await pull(id)) {
+      if (!byId.has(t.id) && inPrimary(t)) byId.set(t.id, t);
     }
   }
 
