@@ -73,7 +73,7 @@ const api=(p,o)=>fetch('/api'+p,o).then(r=>r.json());
 const BUCKETS={pending:'Pending',avoided_cost:'Avoided Cost',domestic_replacement:'Domestic Replacement',third_party_replacement:'3rd Party Replacement',cost:'Cost'};
 
 let roster=[],payroll=[],settings={hours_per_week:40,days_per_week:5,weeks_per_year:52};
-let tab='overview',filter='all',openRow=null,fAgency='all',fSup='all',fMissing=false;
+let tab='overview',filter='all',openRow=null,fAgency='all',fSup='all',fMissing=false,openWeek=null;
 
 async function boot(){ await refresh(); render(); }
 async function refresh(){
@@ -138,10 +138,13 @@ function ovw(){
       <div><div class="lab">Total Annualized Savings</div><div class="big dn">${F(totalSav)}</div></div></div>
     ${agencySection()}
     <div class="sec">Most Recent Posted Payroll</div>
-    ${last?`<div class="card"><div class="lab">Week ending ${last.week_ending}</div><div class="big">${F2(last.total)}</div>
-      ${d!=null?`<div class="meta">vs ${prev.week_ending}: <b class="${d>0?'up':'dn'}">${d>0?'▲ +':'▼ '}${F2(Math.abs(d))}</b></div>`:'<div class="meta">no prior week</div>'}
-      <div style="margin-top:12px">${(last.items||[]).map(i=>`<div class="li"><span>${i.name}${i.notes?` · <span style="color:var(--mut2)">${i.notes}</span>`:''}</span><b>${F2(i.amount)}</b></div>`).join('')}</div></div>`
-      :`<div class="empty">No payroll posted yet.</div>`}`;
+    ${last?`<div class="card"><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px">
+      <div><div class="lab">${last.period||last.week_ending||''}</div><div class="big">${F2(last.total)}</div>
+      ${d!=null?`<div class="meta">vs ${prev.period||prev.week_ending}: <b class="${d>0?'up':'dn'}">${d>0?'▲ +':'▼ '}${F2(Math.abs(d))}</b></div>`:'<div class="meta">no prior week to compare</div>'}</div>
+      <div style="min-width:240px;flex:1;max-width:420px"><div class="lab" style="margin-bottom:6px">By agency</div>
+        ${(last.agency_totals||[]).slice(0,8).map(a=>`<div class="li"><span>${a.agency}</span><b>${F2(a.amount)}</b></div>`).join('')}
+        ${(last.agency_totals||[]).length>8?`<div class="meta" style="margin-top:6px">+${last.agency_totals.length-8} more — see Payroll tab</div>`:''}</div></div></div>`
+      :`<div class="empty">No payroll posted yet — upload finance's file on the Payroll tab.</div>`}`;
 }
 function sc(c,l,v,n,cost){return `<div class="card sav ${c}"><div class="lab">${l}</div><div class="big" style="color:${cost?'var(--red)':'var(--ink)'}">${F(v)}</div><div class="meta">${n} ${n===1?'person':'people'}</div></div>`;}
 
@@ -244,26 +247,55 @@ function bind(){
 }
 
 function pay(){
-  const rows=[...payroll].reverse(),last=payroll[payroll.length-1],prev=payroll[payroll.length-2];
+  const weeks=[...payroll].reverse(); // newest first
+  const last=payroll[payroll.length-1], prev=payroll[payroll.length-2];
   const d=last&&prev?Number(last.total)-Number(prev.total):null;
+  const pct=d!=null&&prev&&Number(prev.total)?((d/Number(prev.total))*100).toFixed(1):null;
   $('#body').innerHTML=`
-    <div class="grid" style="grid-template-columns:1fr 1fr">
-      <div class="card"><div class="lab">Latest Week</div><div class="big">${last?F2(last.total):'—'}</div><div class="meta">${last?'ending '+last.week_ending:''}</div></div>
-      <div class="card"><div class="lab">vs Prior Week</div><div class="big ${d>0?'up':'dn'}">${d!=null?(d>0?'+':'')+F2(d):'—'}</div></div></div>
-    <div class="note" style="margin-top:14px">Upload finance's weekly Excel/CSV. The parser finds name/amount/notes columns automatically — we'll lock it to her exact format once you share the file.</div>
+    <div class="grid" style="grid-template-columns:1fr 1fr 1fr">
+      <div class="card"><div class="lab">Latest Payroll</div><div class="big">${last?F2(last.total):'—'}</div><div class="meta">${last?last.period:'no data'}</div></div>
+      <div class="card"><div class="lab">vs Prior Week</div><div class="big ${d>0?'up':'dn'}">${d!=null?(d>0?'+':'')+F2(d):'—'}</div><div class="meta">${pct!=null?(d>0?'▲ ':'▼ ')+Math.abs(pct)+'%':(prev?'':'need 2 weeks')}</div></div>
+      <div class="card"><div class="lab">Weeks Stored</div><div class="big">${payroll.length}</div><div class="meta">${last&&last.items?last.items.length+' people latest':''}</div></div>
+    </div>
+    <div class="note" style="margin-top:14px">Upload finance's weekly file. The <b>pay period is read straight from the file</b> (the "Period" column), so just pick the file and upload — re-uploading the same week overwrites it. Captures agency, rate, hours, pay & notes per person.</div>
     <div class="card" style="margin-top:14px">
-      <div class="frow"><div><label>Week ending</label><input type="date" id="wk"></div>
-      <div><label>File (.xlsx/.csv)</label><input type="file" id="file" accept=".xlsx,.xls,.csv"></div></div>
-      <button class="btn pri sm" id="up">Upload week</button></div>
-    <div class="sec">Posted Weeks</div>
-    ${rows.length?rows.map(w=>`<div class="card" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between"><b>Week ending ${w.week_ending}</b><b>${F2(w.total)}</b></div>
-      <div style="margin-top:8px">${(w.items||[]).map(i=>`<div class="li"><span>${i.name}${i.notes?` · <span style="color:var(--mut2)">${i.notes}</span>`:''}</span><span>${F2(i.amount)}</span></div>`).join('')}</div>
-      <button class="btn sm" data-del="${w.week_ending}" style="margin-top:8px">Delete</button></div>`).join(''):'<div class="empty">No weeks posted.</div>'}`;
-  $('#up').onclick=async()=>{const wk=$('#wk').value,f=$('#file').files[0];if(!wk||!f){toast('Pick date + file');return;}
-    const fd=new FormData();fd.append('file',f);fd.append('week_ending',wk);
-    const r=await fetch('/api/payroll/upload',{method:'POST',body:fd}).then(r=>r.json());
-    if(r.ok){await refresh();render();toast('Posted '+r.count+' lines');}else toast('Error: '+(r.error||'failed'));};
-  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{await api('/payroll/'+b.dataset.del,{method:'DELETE'});await refresh();render();});
+      <label style="display:block;font-size:11px;color:var(--mut);margin-bottom:4px;font-weight:600">Payroll file (.xlsx / .csv)</label>
+      <input type="file" id="file" accept=".xlsx,.xls,.csv" style="margin-bottom:10px">
+      <button class="btn pri sm" id="up">Upload payroll</button>
+      <span id="upStatus" style="margin-left:10px;font-size:12px;color:var(--mut)"></span>
+    </div>
+    <div class="sec">Posted Weeks (newest first)</div>
+    ${weeks.length?weeks.map((w,idx)=>weekCard(w,idx)).join(''):'<div class="empty">No payroll posted yet.</div>'}`;
+  $('#up').onclick=async()=>{
+    const f=$('#file').files[0]; if(!f){toast('Pick a file first');return;}
+    $('#upStatus').textContent='Uploading…';
+    const fd=new FormData();fd.append('file',f);
+    const r=await fetch('/api/payroll/upload',{method:'POST',body:fd}).then(x=>x.json()).catch(e=>({error:String(e)}));
+    $('#upStatus').textContent='';
+    if(r.ok){await refresh();render();toast(`Posted ${r.period} · ${r.count} people · ${F2(r.total)}`);}
+    else toast('Error: '+(r.error||'failed'));
+  };
+  document.querySelectorAll('[data-pweek]').forEach(h=>h.onclick=()=>{const k=h.dataset.pweek;openWeek=openWeek===k?null:k;render();});
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();if(!confirm('Delete this payroll week?'))return;await api('/payroll/'+encodeURIComponent(b.dataset.del),{method:'DELETE'});await refresh();render();});
+}
+function weekCard(w,idx){
+  const open=openWeek===w.period;
+  const ats=(w.agency_totals||[]);
+  const prevW=payroll[payroll.length-2-idx]; // the week before this one (since weeks are newest-first, idx aligns)
+  return `<div class="card" style="margin-bottom:10px">
+    <div data-pweek="${escAttr(w.period)}" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;gap:10px">
+      <div><b>${w.period||w.week_ending||'—'}</b> <span style="font-size:11px;color:var(--mut2)">${(w.items||[]).length} people</span></div>
+      <div style="display:flex;align-items:center;gap:12px"><b>${F2(w.total)}</b><span style="color:var(--mut)">${open?'▲':'▼'}</span></div>
+    </div>
+    ${open?`
+      <div class="sec" style="margin:14px 2px 8px;font-size:12px">By agency</div>
+      <table><tbody>${ats.map(a=>`<tr><td>${a.agency}</td><td style="text-align:right">${F2(a.amount)}</td></tr>`).join('')}</tbody></table>
+      <div class="sec" style="margin:14px 2px 8px;font-size:12px">Line items</div>
+      <table><thead><tr><th>Name</th><th>Agency</th><th>Rate</th><th>Hrs</th><th style="text-align:right">Pay</th><th>Notes</th></tr></thead>
+      <tbody>${(w.items||[]).map(i=>`<tr><td><b>${i.name}</b></td><td>${i.agency||''}</td><td>${i.rate!=null?F2(i.rate):''}</td><td>${i.hours??''}</td><td style="text-align:right">${F2(i.amount)}</td><td style="color:var(--mut);white-space:pre-line;font-size:11px">${i.notes?esc(i.notes):''}</td></tr>`).join('')}</tbody></table>
+      <button class="btn sm" data-del="${escAttr(w.period)}" style="margin-top:10px">Delete week</button>
+    `:''}
+  </div>`;
 }
 
 function sett(){

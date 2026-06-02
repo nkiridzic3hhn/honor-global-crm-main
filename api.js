@@ -42,49 +42,96 @@ router.put('/classification/:id', async (req, res) => {
 });
 
 router.get('/payroll', async (req, res) => {
-  try { res.json(await q(`SELECT * FROM payroll_weeks ORDER BY week_ending ASC`)); }
+  try { res.json(await q(`SELECT * FROM payroll_weeks ORDER BY week_ending ASC NULLS LAST, period ASC`)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-const COL_NAME=['name','employee','hire','staff','person'];
-const COL_AMOUNT=['amount','pay','total','net','gross','wage','$'];
-const COL_NOTES=['note','memo','detail','comment','remarks'];
+const COL_AGENCY=['market name/company name','market name','company','agency'];
+const COL_NAME=['name of employee/name','name of employee','employee name','employee','staff name'];
+const COL_RATE=['rate'];
+const COL_HOURS=['total hrs','hours','hrs'];
+const COL_AMOUNT=['pay','amount','net pay','gross','wage'];
+const COL_PERIOD=['period','pay period','week'];
+const COL_NOTES=['notes/comments','note','memo','detail','comment','remarks'];
 function pickCol(headers, candidates){
   const lower = headers.map(h => String(h||'').toLowerCase().trim());
-  for (let i=0;i<lower.length;i++) if (candidates.some(c=>lower[i].includes(c))) return i;
+  for (const c of candidates){ const i=lower.findIndex(h=>h===c); if(i>=0) return i; }
+  for (const c of candidates){ const i=lower.findIndex(h=>h.includes(c)); if(i>=0) return i; }
   return -1;
 }
+const num = v => { const n=parseFloat(String(v??'').replace(/[^0-9.\-]/g,'')); return isNaN(n)?null:n; };
+// normalize agency for grouping: collapse case + spacing differences
+const normAgency = a => String(a||'').trim().replace(/\s+/g,' ')
+  .toLowerCase().replace(/\b\w/g, c=>c.toUpperCase());
+
 router.post('/payroll/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'no file' });
-    const weekEnding = req.body.week_ending;
-    if (!weekEnding) return res.status(400).json({ error: 'week_ending required' });
     const wb = xlsx.read(req.file.buffer, { type: 'buffer' });
     const sheet = wb.Sheets[wb.SheetNames[0]];
-    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' });
     if (!rows.length) return res.status(400).json({ error: 'empty sheet' });
+
     const headers = rows[0];
-    const iN = pickCol(headers, COL_NAME), iA = pickCol(headers, COL_AMOUNT), iNo = pickCol(headers, COL_NOTES);
+    const iAg = pickCol(headers, COL_AGENCY);
+    const iN  = pickCol(headers, COL_NAME);
+    const iR  = pickCol(headers, COL_RATE);
+    const iH  = pickCol(headers, COL_HOURS);
+    const iA  = pickCol(headers, COL_AMOUNT);
+    const iP  = pickCol(headers, COL_PERIOD);
+    const iNo = pickCol(headers, COL_NOTES);
+
     const items = [];
+    const agencyMap = {};
+    let detectedPeriod = '';
     for (const r of rows.slice(1)) {
-      const name = String(r[iN<0?0:iN] ?? '').trim();
+      const name = String(r[iN<0?1:iN] ?? '').trim();
+      const amount = num(r[iA<0?4:iA]);
+      // skip the trailing total row (no name) but capture its period if present
       if (!name) continue;
-      const amount = parseFloat(String(r[iA<0?1:iA] ?? '').replace(/[^0-9.\-]/g,'')) || 0;
-      const notes = iNo>=0 ? String(r[iNo] ?? '').trim() : '';
-      items.push({ name, amount, notes });
+      const agency = normAgency(r[iAg<0?0:iAg]);
+      const period = String(r[iP] ?? '').replace(/\t/g,'').trim();
+      if (period && !detectedPeriod) detectedPeriod = period;
+      const item = {
+        agency: agency || null,
+        name,
+        rate: iR>=0 ? num(r[iR]) : null,
+        hours: iH>=0 ? num(r[iH]) : null,
+        amount: amount || 0,
+        notes: iNo>=0 ? String(r[iNo] ?? '').replace(/\\n/g,'\n').trim() : '',
+      };
+      items.push(item);
+      const ak = agency || '(no agency)';
+      agencyMap[ak] = (agencyMap[ak] || 0) + (amount || 0);
     }
+
+    // period key: from file if found, else from request body, else error
+    const period = detectedPeriod || String(req.body.week_ending || '').trim();
+    if (!period) return res.status(400).json({ error: 'could not detect a Period in the file' });
+
+    // try to derive a week_ending date from the period (end of range) for sorting
+    let weekEnding = null;
+    const m = period.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4}).*?(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+    if (m) { const mo=m[4].padStart(2,'0'), d=m[5].padStart(2,'0'), y=m[6].length===2?'20'+m[6]:m[6]; weekEnding=`${y}-${mo}-${d}`; }
+    else { const s=period.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/); if(s){const y=s[3].length===2?'20'+s[3]:s[3]; weekEnding=`${y}-${s[1].padStart(2,'0')}-${s[2].padStart(2,'0')}`;} }
+
     const total = items.reduce((s,x)=>s+x.amount,0);
+    const agencyTotals = Object.entries(agencyMap)
+      .map(([agency,amt])=>({agency, amount:+amt.toFixed(2)}))
+      .sort((a,b)=>b.amount-a.amount);
+
     await q(
-      `INSERT INTO payroll_weeks (week_ending,total,items,notes) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (week_ending) DO UPDATE SET total=$2, items=$3, notes=$4, posted_at=now()`,
-      [weekEnding, total, JSON.stringify(items), req.body.notes || null]
+      `INSERT INTO payroll_weeks (period,week_ending,total,items,agency_totals,notes)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (period) DO UPDATE SET week_ending=$2, total=$3, items=$4, agency_totals=$5, notes=$6, posted_at=now()`,
+      [period, weekEnding, total, JSON.stringify(items), JSON.stringify(agencyTotals), req.body.notes || null]
     );
-    res.json({ ok: true, week_ending: weekEnding, total, count: items.length });
+    res.json({ ok: true, period, week_ending: weekEnding, total, count: items.length, agencies: agencyTotals.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.delete('/payroll/:week', async (req, res) => {
-  try { await q(`DELETE FROM payroll_weeks WHERE week_ending=$1`, [req.params.week]); res.json({ ok: true }); }
+router.delete('/payroll/:period', async (req, res) => {
+  try { await q(`DELETE FROM payroll_weeks WHERE period=$1`, [decodeURIComponent(req.params.period)]); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 

@@ -29,12 +29,14 @@ CREATE TABLE IF NOT EXISTS classifications (
   updated_at          TIMESTAMPTZ DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS payroll_weeks (
-  id           SERIAL PRIMARY KEY,
-  week_ending  DATE NOT NULL UNIQUE,
-  total        NUMERIC NOT NULL DEFAULT 0,
-  items        JSONB NOT NULL DEFAULT '[]',
-  notes        TEXT,
-  posted_at    TIMESTAMPTZ DEFAULT now()
+  id            SERIAL PRIMARY KEY,
+  period        TEXT UNIQUE,
+  week_ending   DATE,
+  total         NUMERIC NOT NULL DEFAULT 0,
+  items         JSONB NOT NULL DEFAULT '[]',
+  agency_totals JSONB NOT NULL DEFAULT '[]',
+  notes         TEXT,
+  posted_at     TIMESTAMPTZ DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS settings (
   id              INT PRIMARY KEY DEFAULT 1,
@@ -46,6 +48,14 @@ CREATE TABLE IF NOT EXISTS settings (
 INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 ALTER TABLE classifications ADD COLUMN IF NOT EXISTS kpis TEXT;
 ALTER TABLE classifications ADD COLUMN IF NOT EXISTS role_description TEXT;
+ALTER TABLE payroll_weeks ADD COLUMN IF NOT EXISTS period TEXT;
+ALTER TABLE payroll_weeks ADD COLUMN IF NOT EXISTS agency_totals JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE payroll_weeks ALTER COLUMN week_ending DROP NOT NULL;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='payroll_weeks_period_key') THEN
+    BEGIN ALTER TABLE payroll_weeks ADD CONSTRAINT payroll_weeks_period_key UNIQUE (period); EXCEPTION WHEN others THEN NULL; END;
+  END IF;
+END $$;
 `;
 
 export async function migrate() {
