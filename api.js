@@ -187,4 +187,76 @@ router.get('/logs', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- Domestic payroll (the local cost we're reducing) ----
+const COL_HEAD=['headcount','head count','employees','# employees','count','staff count'];
+
+router.get('/domestic', async (req, res) => {
+  try { res.json(await q(`SELECT * FROM domestic_payroll ORDER BY week_ending ASC NULLS LAST, period ASC, agency ASC`)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/domestic/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'no file' });
+    const wb = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' });
+    if (!rows.length) return res.status(400).json({ error: 'empty sheet' });
+    const headers = rows[0];
+    const iAg = pickCol(headers, COL_AGENCY);
+    const iA  = pickCol(headers, COL_AMOUNT);
+    const iP  = pickCol(headers, COL_PERIOD);
+    const iHc = pickCol(headers, COL_HEAD);
+    const iNo = pickCol(headers, COL_NOTES);
+
+    // Accumulate by (period, agency). If no agency column, everything rolls to '(all)'.
+    const acc = {}; // key -> {period, agency, total, headcount}
+    let firstPeriod = '';
+    for (const r of rows.slice(1)) {
+      const amount = num(r[iA<0?1:iA]);
+      const period = String(r[iP] ?? '').replace(/\t/g,'').trim();
+      if (period && !firstPeriod) firstPeriod = period;
+      const agency = iAg>=0 ? normAgency(r[iAg]) : '(all)';
+      if (amount == null && !agency) continue;
+      const key = (period||firstPeriod||'?') + '||' + (agency || '(all)');
+      if (!acc[key]) acc[key] = { period: period||firstPeriod, agency: agency||'(all)', total: 0, headcount: null };
+      acc[key].total += amount || 0;
+      if (iHc >= 0) { const hc = num(r[iHc]); if (hc != null) acc[key].headcount = (acc[key].headcount||0) + hc; }
+    }
+    const entries = Object.values(acc).filter(e => e.period);
+    if (!entries.length) return res.status(400).json({ error: 'could not detect Period rows in the file' });
+
+    let weeks = new Set();
+    for (const e of entries) {
+      const m = e.period.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:.*?(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4}))?/);
+      let we=null;
+      if (m){ if(m[4]){const y=m[6].length===2?'20'+m[6]:m[6];we=`${y}-${m[4].padStart(2,'0')}-${m[5].padStart(2,'0')}`;}
+              else {const y=m[3].length===2?'20'+m[3]:m[3];we=`${y}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;} }
+      await q(
+        `INSERT INTO domestic_payroll (period,agency,week_ending,total,headcount,notes)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (period,agency) DO UPDATE SET week_ending=$3, total=$4, headcount=$5, notes=$6, posted_at=now()`,
+        [e.period, e.agency, we, e.total, e.headcount, req.body.notes || null]
+      );
+      weeks.add(e.period);
+    }
+    await logEvent('domestic_upload', `Domestic payroll uploaded: ${weeks.size} week(s), ${entries.length} agency-rows`, { weeks: [...weeks], rows: entries.length });
+    res.json({ ok: true, weeks: [...weeks], rows: entries.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/domestic/:period', async (req, res) => {
+  try { const p=decodeURIComponent(req.params.period); await q(`DELETE FROM domestic_payroll WHERE period=$1`, [p]); await logEvent('domestic_delete', `Domestic payroll week deleted: ${p}`, { period: p }); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- Impact analysis: domestic vs offshore over time ----
+router.get('/impact', async (req, res) => {
+  try {
+    const offshore = await q(`SELECT period, week_ending, total, agency_totals FROM payroll_weeks ORDER BY week_ending ASC NULLS LAST, period ASC`);
+    const domestic = await q(`SELECT period, agency, week_ending, total, headcount FROM domestic_payroll ORDER BY week_ending ASC NULLS LAST, period ASC`);
+    res.json({ offshore, domestic });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 export default router;

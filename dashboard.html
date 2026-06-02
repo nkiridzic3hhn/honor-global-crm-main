@@ -107,11 +107,11 @@ function render(){
       <div><div class="ttl">Honor Global · Workforce Cost & Savings</div><div class="sub">Live from ClickUp</div></div>
       <div class="spacer"></div><div class="sync" id="syncTxt"></div>
       <button class="btn" id="syncBtn">⟳ Sync now</button></div>
-    <div class="tabs">${['overview|Overview','buckets|Buckets & Savings','payroll|Payroll','logs|Logs','settings|Settings'].map(x=>{const[k,l]=x.split('|');return `<div class="tab ${tab===k?'on':''}" data-tab="${k}">${l}</div>`}).join('')}</div>
+    <div class="tabs">${['overview|Overview','buckets|Buckets & Savings','payroll|Payroll','impact|Impact','logs|Logs','settings|Settings'].map(x=>{const[k,l]=x.split('|');return `<div class="tab ${tab===k?'on':''}" data-tab="${k}">${l}</div>`}).join('')}</div>
     <div class="body" id="body"></div>`;
   $('#syncBtn').onclick=async()=>{$('#syncBtn').textContent='⟳ Syncing…';await api('/sync',{method:'POST'});await refresh();render();toast('Synced from ClickUp');};
   document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{tab=t.dataset.tab;openRow=null;render();});
-  ({overview:ovw,buckets:bks,payroll:pay,logs:logsTab,settings:sett}[tab])();
+  ({overview:ovw,buckets:bks,payroll:pay,impact:impactTab,logs:logsTab,settings:sett}[tab])();
   api('/sync/status').then(s=>{if($('#syncTxt')&&s.lastSync)$('#syncTxt').textContent='● Live · '+roster.length+' active';});
 }
 
@@ -298,6 +298,122 @@ function weekCard(w,idx){
       <button class="btn sm" data-del="${escAttr(w.period)}" style="margin-top:10px">Delete week</button>
     `:''}
   </div>`;
+}
+
+function impactTab(){
+  const b=$('#body');
+  b.innerHTML=`<div class="note">Compares <b style="color:var(--green)">domestic Honor payroll</b> (the local cost we're reducing) against <b style="color:var(--accent)">Honor Global offshore payroll</b> over time. Upload domestic weekly payroll below.</div>
+    <div class="card" style="margin-top:14px">
+      <label style="display:block;font-size:11px;color:var(--mut);margin-bottom:4px;font-weight:600">Domestic payroll file (.xlsx / .csv)</label>
+      <div class="meta" style="margin-bottom:8px">Flexible columns — needs a Period and an amount; agency + headcount optional. No agency column = rolled into one company-wide total.</div>
+      <input type="file" id="domFile" accept=".xlsx,.xls,.csv" style="margin-bottom:10px">
+      <button class="btn pri sm" id="domUp">Upload domestic payroll</button>
+      <span id="domStatus" style="margin-left:10px;font-size:12px;color:var(--mut)"></span>
+    </div>
+    <div id="impactBody"><div class="empty">Loading…</div></div>`;
+  $('#domUp').onclick=async()=>{
+    const f=$('#domFile').files[0]; if(!f){toast('Pick a file');return;}
+    $('#domStatus').textContent='Uploading…';
+    const fd=new FormData();fd.append('file',f);
+    const r=await fetch('/api/domestic/upload',{method:'POST',body:fd}).then(x=>x.json()).catch(e=>({error:String(e)}));
+    $('#domStatus').textContent='';
+    if(r.ok){toast(`Loaded ${r.weeks.length} week(s)`);drawImpact();}else toast('Error: '+(r.error||'failed'));
+  };
+  drawImpact();
+}
+
+async function drawImpact(){
+  const wrap=$('#impactBody'); if(!wrap)return;
+  const data=await api('/impact').catch(()=>null);
+  if(!data){wrap.innerHTML='<div class="empty">Could not load.</div>';return;}
+  const { offshore, domestic } = data;
+  if(!domestic.length){
+    wrap.innerHTML='<div class="empty">No domestic payroll yet. Upload the CEO\'s weekly domestic data above to see the comparison.</div>';
+    return;
+  }
+  // agencies available in domestic data
+  const agencies=[...new Set(domestic.map(d=>d.agency))].filter(a=>a&&a!=='(all)').sort();
+  if(!window._impAgency) window._impAgency='(all)';
+  const sel=window._impAgency;
+
+  // Build weekly series. Key by period; value = total for selected scope.
+  function offshoreForWeek(p){
+    const w=offshore.find(o=>o.period===p); if(!w)return null;
+    if(sel==='(all)') return Number(w.total);
+    const at=(w.agency_totals||[]).find(a=>a.agency===sel||a.agency===normalize(sel));
+    return at?Number(at.amount):0;
+  }
+  function normalize(a){return String(a||'').trim();}
+  // domestic by period for scope
+  const domByPeriod={};
+  domestic.forEach(d=>{
+    if(sel!=='(all)' && d.agency!==sel) return;
+    domByPeriod[d.period]=domByPeriod[d.period]||{total:0,head:0,week_ending:d.week_ending};
+    domByPeriod[d.period].total+=Number(d.total)||0;
+    if(d.headcount!=null) domByPeriod[d.period].head+=Number(d.headcount);
+  });
+  // union of all periods, sorted by week_ending
+  const periods=[...new Set([...Object.keys(domByPeriod), ...offshore.map(o=>o.period)])]
+    .map(p=>{const we=domByPeriod[p]?.week_ending || offshore.find(o=>o.period===p)?.week_ending; return {p,we};})
+    .sort((a,b)=>String(a.we||a.p)<String(b.we||b.p)?-1:1);
+
+  const series=periods.map(({p})=>({
+    period:p,
+    dom: domByPeriod[p]?domByPeriod[p].total:null,
+    off: offshoreForWeek(p),
+    head: domByPeriod[p]?domByPeriod[p].head:null,
+  }));
+
+  // net-impact summary: compare first domestic week vs latest domestic week
+  const domWeeks=series.filter(s=>s.dom!=null);
+  const first=domWeeks[0], lastW=domWeeks[domWeeks.length-1];
+  const domChange = first&&lastW ? lastW.dom-first.dom : null;
+  const offNow = lastW ? (lastW.off||0) : 0;
+  const headChange = first&&lastW&&first.head!=null&&lastW.head!=null ? lastW.head-first.head : null;
+
+  const chart=impactChart(series, sel);
+  const summary=`<div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">
+    <div class="card"><div class="lab">Domestic change since start</div><div class="big ${domChange<0?'dn':'up'}">${domChange!=null?(domChange<0?'▼ ':'▲ +')+F(Math.abs(domChange)):'—'}</div><div class="meta">${first?first.period+' → '+lastW.period:''}</div></div>
+    <div class="card"><div class="lab">Offshore payroll now</div><div class="big">${F(offNow)}</div><div class="meta">${sel==='(all)'?'company-wide / wk':sel+' / wk'}</div></div>
+    <div class="card"><div class="lab">Net weekly effect</div><div class="big ${(domChange+offNow)<0?'dn':'up'}">${domChange!=null?((domChange+offNow)<0?'▼ ':'+')+F(Math.abs(domChange+offNow)):'—'}</div><div class="meta">domestic change + offshore added${headChange!=null?` · domestic head ${headChange>0?'+':''}${headChange}`:''}</div></div>
+  </div>`;
+
+  wrap.innerHTML=`
+    <div style="display:flex;gap:10px;align-items:flex-end;margin:16px 0 6px">
+      <div style="min-width:220px"><label style="display:block;font-size:11px;color:var(--mut);margin-bottom:4px;font-weight:600">Scope</label>
+        <select id="impSel"><option value="(all)" ${sel==='(all)'?'selected':''}>Company-wide</option>${agencies.map(a=>`<option ${sel===a?'selected':''}>${a}</option>`).join('')}</select></div>
+    </div>
+    ${summary}
+    <div class="card">${chart}</div>`;
+  $('#impSel').onchange=e=>{window._impAgency=e.target.value;drawImpact();};
+}
+
+function impactChart(series, scope){
+  if(!series.length) return '<div class="empty">No data.</div>';
+  const w=860,h=300,padL=64,padR=16,padT=16,padB=46;
+  const vals=series.flatMap(s=>[s.dom,s.off].filter(v=>v!=null));
+  const maxV=Math.max(...vals,1);
+  const n=series.length;
+  const x=i=>padL+(n<=1?0:i*(w-padL-padR)/(n-1));
+  const y=v=>h-padB-(v/maxV)*(h-padT-padB);
+  const line=(key,color)=>{
+    const pts=series.map((s,i)=>s[key]!=null?`${x(i)},${y(s[key])}`:null).filter(Boolean);
+    if(pts.length<1)return '';
+    const path=pts.map((p,i)=>(i?'L':'M')+p).join(' ');
+    const dots=series.map((s,i)=>s[key]!=null?`<circle cx="${x(i)}" cy="${y(s[key])}" r="2.5" fill="${color}"/>`:'').join('');
+    return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>${dots}`;
+  };
+  // y gridlines
+  const grid=[0,.25,.5,.75,1].map(f=>{const gy=padT+(1-f)*(h-padT-padB);return `<line x1="${padL}" y1="${gy}" x2="${w-padR}" y2="${gy}" stroke="var(--line)" stroke-width="1"/><text x="${padL-8}" y="${gy+3}" text-anchor="end" font-size="9" fill="var(--mut2)">${F(maxV*f)}</text>`;}).join('');
+  // x labels (sparse)
+  const step=Math.ceil(n/8);
+  const xlab=series.map((s,i)=>i%step===0?`<text x="${x(i)}" y="${h-padB+16}" text-anchor="middle" font-size="8.5" fill="var(--mut2)">${(s.period||'').split(' - ')[0]}</text>`:'').join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" style="max-width:${w}px">
+    ${grid}${xlab}
+    ${line('dom','var(--green)')}
+    ${line('off','var(--accent)')}
+  </svg>
+  <div class="meta" style="margin-top:6px"><span style="color:var(--green)">■</span> Domestic Honor payroll &nbsp;&nbsp; <span style="color:var(--accent)">■</span> Honor Global offshore payroll &nbsp;·&nbsp; ${scope==='(all)'?'company-wide':scope}, weekly</div>`;
 }
 
 function logsTab(){

@@ -45,6 +45,17 @@ CREATE TABLE IF NOT EXISTS settings (
   weeks_per_year  NUMERIC DEFAULT 52,
   CHECK (id = 1)
 );
+CREATE TABLE IF NOT EXISTS domestic_payroll (
+  id            SERIAL PRIMARY KEY,
+  period        TEXT NOT NULL,
+  agency        TEXT NOT NULL DEFAULT '(all)',
+  week_ending   DATE,
+  total         NUMERIC NOT NULL DEFAULT 0,
+  headcount     INTEGER,
+  notes         TEXT,
+  posted_at     TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(period, agency)
+);
 CREATE TABLE IF NOT EXISTS activity_log (
   id        SERIAL PRIMARY KEY,
   ts        TIMESTAMPTZ DEFAULT now(),
