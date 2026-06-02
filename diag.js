@@ -2,6 +2,7 @@
 // Tries several ClickUp fetch strategies and reports counts for each,
 // so we can see which one reaches the true total (your 113).
 
+import { fetchActiveRoster } from './clickup.js';
 const API = 'https://api.clickup.com/api/v2';
 const ACTIVE = (process.env.ACTIVE_STATUS || 'stage 8: hired - active').toLowerCase();
 
@@ -91,6 +92,11 @@ export async function runDiagnostics() {
       out.strategyB_team = summarize(b);
     } catch (e) { out.strategyB_team = { error: e.message }; }
   }
+
+  try {
+    const c = await fetchActiveRoster();
+    out.strategyC_twopass = { active_count: c.length };
+  } catch (e) { out.strategyC_twopass = { error: e.message }; }
 
   return out;
 }
