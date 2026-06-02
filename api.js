@@ -15,7 +15,7 @@ router.get('/roster', async (req, res) => {
   try {
     const rows = await q(
       `SELECT h.*, c.bucket, c.replacing_who, c.replaced_who, c.replaced_annual_cost,
-              c.hourly_saving, c.annual_saving, c.notes
+              c.hourly_saving, c.annual_saving, c.notes, c.kpis, c.role_description
        FROM hires h LEFT JOIN classifications c ON c.clickup_id = h.clickup_id
        WHERE h.active = TRUE ORDER BY h.name`);
     res.json(rows);
@@ -27,13 +27,15 @@ router.put('/classification/:id', async (req, res) => {
     const { id } = req.params; const b = req.body || {};
     if (b.bucket && !VALID_BUCKETS.includes(b.bucket)) return res.status(400).json({ error: 'invalid bucket' });
     await q(
-      `INSERT INTO classifications (clickup_id,bucket,replacing_who,replaced_who,replaced_annual_cost,hourly_saving,annual_saving,notes,updated_at)
-       VALUES ($1,COALESCE($2,'pending'),$3,$4,$5,$6,$7,$8,now())
+      `INSERT INTO classifications (clickup_id,bucket,replacing_who,replaced_who,replaced_annual_cost,hourly_saving,annual_saving,notes,kpis,role_description,updated_at)
+       VALUES ($1,COALESCE($2,'pending'),$3,$4,$5,$6,$7,$8,$9,$10,now())
        ON CONFLICT (clickup_id) DO UPDATE SET
          bucket=COALESCE($2,classifications.bucket), replacing_who=$3, replaced_who=$4,
-         replaced_annual_cost=$5, hourly_saving=$6, annual_saving=$7, notes=$8, updated_at=now()`,
+         replaced_annual_cost=$5, hourly_saving=$6, annual_saving=$7, notes=$8,
+         kpis=$9, role_description=$10, updated_at=now()`,
       [id, b.bucket || null, b.replacing_who || null, b.replaced_who || null,
-       b.replaced_annual_cost ?? null, b.hourly_saving ?? null, b.annual_saving ?? null, b.notes || null]
+       b.replaced_annual_cost ?? null, b.hourly_saving ?? null, b.annual_saving ?? null, b.notes || null,
+       b.kpis || null, b.role_description || null]
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }

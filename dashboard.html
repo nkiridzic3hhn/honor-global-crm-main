@@ -42,6 +42,9 @@
   th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);font-weight:600;padding:9px 10px;border-bottom:1px solid var(--line)}
   td{padding:9px 10px;border-bottom:1px solid var(--line)}
   tr:hover td{background:#141821}
+  tr.pendingRow td{background:rgba(224,168,46,0.10);border-bottom-color:rgba(224,168,46,0.25)}
+  tr.pendingRow:hover td{background:rgba(224,168,46,0.16)}
+  tr.missingRow td{box-shadow:inset 3px 0 0 var(--violet)}
   select,input,textarea{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:7px;padding:6px 8px;font-size:12px;font-family:inherit;width:100%}
   select:focus,input:focus,textarea:focus{outline:none;border-color:var(--accent)}
   .chips{display:flex;gap:7px;flex-wrap:wrap;margin:14px 0}
@@ -71,7 +74,7 @@ const api=(p,o)=>fetch('/api'+p,o).then(r=>r.json());
 const BUCKETS={pending:'Pending',avoided_cost:'Avoided Cost',domestic_replacement:'Domestic Replacement',third_party_replacement:'3rd Party Replacement',cost:'Cost'};
 
 let roster=[],payroll=[],settings={hours_per_week:40,days_per_week:5,weeks_per_year:52};
-let tab='overview',filter='all',openRow=null,fAgency='all',fSup='all';
+let tab='overview',filter='all',openRow=null,fAgency='all',fSup='all',fMissing=false;
 
 async function boot(){ await refresh(); render(); }
 async function refresh(){
@@ -176,48 +179,61 @@ function escSvg(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');}
 
 function bks(){
   const order=['all','pending','avoided_cost','domestic_replacement','third_party_replacement','cost'];
+  const isMissing=e=>(!e.kpis||!e.role_description);
   const list=roster.filter(e=>
     (filter==='all'||(e.bucket||'pending')===filter) &&
     (fAgency==='all'||(e.agency||'')===fAgency) &&
-    (fSup==='all'||(e.supervisor||'')===fSup)
+    (fSup==='all'||(e.supervisor||'')===fSup) &&
+    (!fMissing||isMissing(e))
   );
   const agencies=uniq('agency'), sups=uniq('supervisor');
+  const missingCount=roster.filter(isMissing).length;
+  const anyFilter=(fAgency!=='all'||fSup!=='all'||filter!=='all'||fMissing);
   $('#body').innerHTML=`
-    <div class="note">Classify every active hire. New hires start <b>Pending</b>. You enter who they replaced, that cost, and the hourly + annual saving. Stored here, not in ClickUp.</div>
+    <div class="note">Classify every active hire. <b style="color:var(--amber)">Amber rows</b> are still Pending. The <b style="color:#c4a8ff">⚠ info</b> badge & violet edge mean KPIs or Role Description are missing.</div>
     <div class="chips">${order.map(k=>`<div class="chip ${filter===k?'on':''}" data-b="${k}">${k==='all'?'All':BUCKETS[k]} <span style="opacity:.7">${k==='all'?roster.length:countB(k)}</span></div>`).join('')}</div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;align-items:flex-end">
-      <div style="min-width:200px"><label style="display:block;font-size:11px;color:var(--mut);margin-bottom:4px;font-weight:600">Agency</label>
+      <div style="min-width:190px"><label style="display:block;font-size:11px;color:var(--mut);margin-bottom:4px;font-weight:600">Agency</label>
         <select id="fAgency"><option value="all">All agencies</option>${agencies.map(a=>`<option value="${escAttr(a)}" ${fAgency===a?'selected':''}>${a}</option>`).join('')}</select></div>
-      <div style="min-width:200px"><label style="display:block;font-size:11px;color:var(--mut);margin-bottom:4px;font-weight:600">Supervisor</label>
+      <div style="min-width:190px"><label style="display:block;font-size:11px;color:var(--mut);margin-bottom:4px;font-weight:600">Supervisor</label>
         <select id="fSup"><option value="all">All supervisors</option>${sups.map(s=>`<option value="${escAttr(s)}" ${fSup===s?'selected':''}>${s}</option>`).join('')}</select></div>
-      <div style="font-size:12px;color:var(--mut);padding-bottom:8px">Showing <b style="color:var(--ink)">${list.length}</b> of ${roster.length}${(fAgency!=='all'||fSup!=='all'||filter!=='all')?` · <span id="clearF" style="color:var(--accent);cursor:pointer">clear filters</span>`:''}</div>
+      <button class="btn sm ${fMissing?'pri':''}" id="fMiss" style="margin-bottom:1px">⚠ Missing KPI / Role (${missingCount})</button>
+      <div style="font-size:12px;color:var(--mut);padding-bottom:8px">Showing <b style="color:var(--ink)">${list.length}</b> of ${roster.length}${anyFilter?` · <span id="clearF" style="color:var(--accent);cursor:pointer">clear filters</span>`:''}</div>
     </div>
-    <table><thead><tr><th>Name</th><th>Position</th><th>Agency</th><th>Supervisor</th><th>Rate</th><th>Annual</th><th>Bucket</th><th>Saving</th><th></th></tr></thead>
-    <tbody>${list.length?list.map(row).join(''):'<tr><td colspan="9" class="empty">None.</td></tr>'}</tbody></table>`;
+    <table><thead><tr><th>Name</th><th>Position</th><th>Agency</th><th>Supervisor</th><th>Rate</th><th>Annual</th><th>Bucket</th><th>Saving</th><th>Info</th><th></th></tr></thead>
+    <tbody>${list.length?list.map(row).join(''):'<tr><td colspan="10" class="empty">None.</td></tr>'}</tbody></table>`;
   document.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{filter=c.dataset.b;render();});
   $('#fAgency').onchange=e=>{fAgency=e.target.value;render();};
   $('#fSup').onchange=e=>{fSup=e.target.value;render();};
-  const cf=$('#clearF'); if(cf) cf.onclick=()=>{filter='all';fAgency='all';fSup='all';render();};
+  $('#fMiss').onclick=()=>{fMissing=!fMissing;render();};
+  const cf=$('#clearF'); if(cf) cf.onclick=()=>{filter='all';fAgency='all';fSup='all';fMissing=false;render();};
   bind();
 }
 function escAttr(s){return String(s).replace(/"/g,'&quot;');}
 function row(e){
   const b=e.bucket||'pending',s=saving(e),isCost=b==='cost';
   const st=b==='pending'?'<span style="color:var(--mut2)">—</span>':isCost?`<span class="up">${F(annual(e))} cost</span>`:`<span class="dn">+${F(s)}</span>`;
+  const missing = !e.kpis || !e.role_description;
+  const rowCls = (b==='pending'?'pendingRow ':'') + (missing?'missingRow':'');
+  const infoBadge = missing
+    ? `<span class="bdg" style="background:#241640;color:#c4a8ff" title="Missing ${!e.kpis?'KPIs':''}${!e.kpis&&!e.role_description?' & ':''}${!e.role_description?'Role Desc':''}">⚠ info</span>`
+    : `<span class="bdg" style="background:#0e3325;color:#6ee7b0">✓</span>`;
   let drawer='';
-  if(openRow===e.clickup_id){drawer=`<tr><td colspan="9" style="background:#10131a"><div class="drawer">
+  if(openRow===e.clickup_id){drawer=`<tr><td colspan="10" style="background:#10131a"><div class="drawer">
     <div class="frow"><div><label>Who they're replacing</label><input data-f="replacing_who" value="${esc(e.replacing_who)}"></div>
     <div><label>Who they replaced</label><input data-f="replaced_who" value="${esc(e.replaced_who)}"></div></div>
     <div class="frow"><div><label>That person's annual cost ($)</label><input type="number" data-f="replaced_annual_cost" value="${e.replaced_annual_cost??''}"></div>
     <div><label>Hourly saving ($/hr)</label><input type="number" step="0.01" id="hr" data-f="hourly_saving" value="${e.hourly_saving??''}"></div></div>
     <div class="frow"><div><label>Annual saving ($)</label><input type="number" id="an" data-f="annual_saving" value="${e.annual_saving??''}"></div>
     <div><label>This hire — annual run-rate</label><input value="${F(annual(e))}" disabled style="opacity:.6"></div></div>
+    <div style="margin-bottom:10px"><label>Role Description ${!e.role_description?'<span style="color:var(--violet)">— missing</span>':''}</label><textarea data-f="role_description" rows="3" placeholder="Full description of this person's role…">${esc(e.role_description)}</textarea></div>
+    <div style="margin-bottom:10px"><label>KPIs ${!e.kpis?'<span style="color:var(--violet)">— missing</span>':''}</label><textarea data-f="kpis" rows="3" placeholder="Describe the KPIs / how performance is measured…">${esc(e.kpis)}</textarea></div>
     <div style="margin-bottom:10px"><label>Notes</label><textarea data-f="notes" rows="2">${esc(e.notes)}</textarea></div>
     <button class="btn pri sm" data-save="${e.clickup_id}">Save</button></div></td></tr>`;}
-  return `<tr><td><b>${e.name}</b><div style="font-size:10.5px;color:var(--mut2)">${e.role_type||''}</div></td>
+  return `<tr class="${rowCls}"><td><b>${e.name}</b><div style="font-size:10.5px;color:var(--mut2)">${e.role_type||''}</div></td>
     <td>${e.position||''}</td><td>${e.agency||''}</td><td>${e.supervisor||''}</td><td>${F2(e.pay_rate)}/hr</td><td>${F(annual(e))}</td>
     <td><select data-bucket="${e.clickup_id}">${Object.keys(BUCKETS).map(k=>`<option value="${k}" ${b===k?'selected':''}>${BUCKETS[k]}</option>`).join('')}</select></td>
-    <td>${st}</td><td><button class="btn sm" data-edit="${e.clickup_id}">${openRow===e.clickup_id?'Close':'Details'}</button></td></tr>${drawer}`;
+    <td>${st}</td><td>${infoBadge}</td><td><button class="btn sm" data-edit="${e.clickup_id}">${openRow===e.clickup_id?'Close':'Details'}</button></td></tr>${drawer}`;
 }
 function bind(){
   document.querySelectorAll('[data-bucket]').forEach(s=>s.onchange=async()=>{await api('/classification/'+s.dataset.bucket,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({bucket:s.value})});await refresh();render();toast('Bucket updated');});

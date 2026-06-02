@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS classifications (
   hourly_saving       NUMERIC,
   annual_saving       NUMERIC,
   notes               TEXT,
+  kpis                TEXT,
+  role_description    TEXT,
   updated_at          TIMESTAMPTZ DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS payroll_weeks (
@@ -42,6 +44,8 @@ CREATE TABLE IF NOT EXISTS settings (
   CHECK (id = 1)
 );
 INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+ALTER TABLE classifications ADD COLUMN IF NOT EXISTS kpis TEXT;
+ALTER TABLE classifications ADD COLUMN IF NOT EXISTS role_description TEXT;
 `;
 
 export async function migrate() {
