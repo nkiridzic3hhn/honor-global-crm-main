@@ -283,11 +283,16 @@ function pay(){
 function weekCard(w,idx){
   const open=openWeek===w.period;
   const ats=(w.agency_totals||[]);
-  const prevW=payroll[payroll.length-2-idx]; // the week before this one (since weeks are newest-first, idx aligns)
   return `<div class="card" style="margin-bottom:10px">
-    <div data-pweek="${escAttr(w.period)}" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;gap:10px">
-      <div><b>${w.period||w.week_ending||'—'}</b> <span style="font-size:11px;color:var(--mut2)">${(w.items||[]).length} people</span></div>
-      <div style="display:flex;align-items:center;gap:12px"><b>${F2(w.total)}</b><span style="color:var(--mut)">${open?'▲':'▼'}</span></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div data-pweek="${escAttr(w.period)}" style="display:flex;align-items:center;gap:10px;cursor:pointer;flex:1">
+        <span style="color:var(--mut)">${open?'▲':'▼'}</span>
+        <span><b>${w.period||w.week_ending||'—'}</b> <span style="font-size:11px;color:var(--mut2)">${(w.items||[]).length} people</span></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px">
+        <b>${F2(w.total)}</b>
+        <button class="btn sm" data-del="${escAttr(w.period)}" title="Delete this week" style="color:#ff9bac;border-color:#3a141d">Delete</button>
+      </div>
     </div>
     ${open?`
       <div class="sec" style="margin:14px 2px 8px;font-size:12px">By agency</div>
@@ -295,7 +300,6 @@ function weekCard(w,idx){
       <div class="sec" style="margin:14px 2px 8px;font-size:12px">Line items</div>
       <table><thead><tr><th>Name</th><th>Agency</th><th>Rate</th><th>Hrs</th><th style="text-align:right">Pay</th><th>Notes</th></tr></thead>
       <tbody>${(w.items||[]).map(i=>`<tr><td><b>${i.name}</b></td><td>${i.agency||''}</td><td>${i.rate!=null?F2(i.rate):''}</td><td>${i.hours??''}</td><td style="text-align:right">${F2(i.amount)}</td><td style="color:var(--mut);white-space:pre-line;font-size:11px">${i.notes?esc(i.notes):''}</td></tr>`).join('')}</tbody></table>
-      <button class="btn sm" data-del="${escAttr(w.period)}" style="margin-top:10px">Delete week</button>
     `:''}
   </div>`;
 }
