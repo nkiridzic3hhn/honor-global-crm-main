@@ -107,4 +107,12 @@ router.get('/diag', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- Names dump (temporary) — visit /api/names to list active people ----
+router.get('/names', async (req, res) => {
+  try {
+    const rows = await q(`SELECT clickup_id, name FROM hires WHERE active=TRUE ORDER BY name`);
+    res.json({ count: rows.length, people: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 export default router;
