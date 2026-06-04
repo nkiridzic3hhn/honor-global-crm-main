@@ -12,6 +12,9 @@ const FIELD = {
 
 const ACTIVE_STATUS = (process.env.ACTIVE_STATUS || 'stage 8: hired - active').toLowerCase();
 
+// NEW: id of the "City / Province" custom field, set in Railway as CLICKUP_LOCATION_FIELD_ID
+const LOCATION_FIELD_ID = process.env.CLICKUP_LOCATION_FIELD_ID || '';
+
 function headers() {
   const token = process.env.CLICKUP_TOKEN;
   if (!token) throw new Error('CLICKUP_TOKEN is not set');
@@ -29,12 +32,23 @@ function dropdownLabel(field) {
 }
 function getField(task, id) { return (task.custom_fields || []).find(f => f.id === id); }
 
+// NEW: read the location field, whether it's a dropdown or a plain text field
+function locationLabel(task) {
+  if (!LOCATION_FIELD_ID) return '';
+  const f = getField(task, LOCATION_FIELD_ID);
+  if (!f || f.value == null) return '';
+  const dd = dropdownLabel(f);                 // dropdown field
+  if (dd) return dd;
+  return typeof f.value === 'string' ? f.value.trim() : String(f.value); // text field
+}
+
 function mapTask(task) {
   const rate = getField(task, FIELD.payRate);
   return {
     clickup_id: task.id,
     name: task.name,
     status: task.status?.status || '',
+    location:   locationLabel(task),
     position:   dropdownLabel(getField(task, FIELD.position)),
     supervisor: dropdownLabel(getField(task, FIELD.supervisor)),
     agency:     dropdownLabel(getField(task, FIELD.agency)),

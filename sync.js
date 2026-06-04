@@ -38,13 +38,13 @@ export async function runSync() {
         }
       }
       await client.query(
-        `INSERT INTO hires (clickup_id,name,position,supervisor,agency,role_type,pay_rate,start_date,is_subtask,active,last_synced)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TRUE,now())
+        `INSERT INTO hires (clickup_id,name,position,supervisor,agency,role_type,pay_rate,start_date,is_subtask,location,active,last_synced)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,now())
          ON CONFLICT (clickup_id) DO UPDATE SET
            name=EXCLUDED.name, position=EXCLUDED.position, supervisor=EXCLUDED.supervisor,
            agency=EXCLUDED.agency, role_type=EXCLUDED.role_type, pay_rate=EXCLUDED.pay_rate,
-           start_date=EXCLUDED.start_date, is_subtask=EXCLUDED.is_subtask, active=TRUE, last_synced=now()`,
-        [r.clickup_id, r.name, r.position, r.supervisor, r.agency, r.role_type, r.pay_rate, r.start_date, r.is_subtask]
+           start_date=EXCLUDED.start_date, is_subtask=EXCLUDED.is_subtask, location=EXCLUDED.location, active=TRUE, last_synced=now()`,
+        [r.clickup_id, r.name, r.position, r.supervisor, r.agency, r.role_type, r.pay_rate, r.start_date, r.is_subtask, r.location || null]
       );
       await client.query(
         `INSERT INTO classifications (clickup_id) VALUES ($1) ON CONFLICT (clickup_id) DO NOTHING`,
