@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Honor Global — PH Workforce Status Board</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d1117;--panel:#151b23;--panel-2:#1c242e;--line:#262f3a;--txt:#e6edf3;--muted:#8b97a6;
+    --orange:#ff6a1a;--green:#34c759;--yellow:#ffb020;--red:#ff3b3b;--grey:#5b6675;
+    --green-bg:rgba(52,199,89,.12);--yellow-bg:rgba(255,176,32,.12);--red-bg:rgba(255,59,59,.12);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:'IBM Plex Sans',sans-serif;height:100vh;overflow:hidden;
+    background-image:radial-gradient(circle at 15% 0%,rgba(255,106,26,.06),transparent 40%)}
+  .num{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#10161d,#0d1117)}
+  .brand{display:flex;align-items:center;gap:13px}
+  .logo{width:34px;height:34px;border-radius:8px;background:var(--orange);display:grid;place-items:center;font-weight:700;color:#0d1117;font-size:18px;box-shadow:0 0 18px rgba(255,106,26,.4)}
+  .brand h1{font-size:16px;font-weight:600}
+  .brand p{font-size:11px;color:var(--muted);letter-spacing:.4px;text-transform:uppercase}
+  .head-right{display:flex;align-items:center;gap:18px}
+  .clock{text-align:right}.clock .t{font-size:18px;font-weight:600}.clock .d{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+  .refresh{background:var(--panel-2);border:1px solid var(--line);color:var(--txt);padding:8px 14px;border-radius:8px;font-family:inherit;font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:7px;transition:.15s}
+  .refresh:hover{border-color:var(--orange);color:var(--orange)}
+  .refresh.spin .ic{animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .summary{display:flex;gap:10px;padding:14px 22px;border-bottom:1px solid var(--line)}
+  .stat{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 16px;position:relative;overflow:hidden}
+  .stat .bar{position:absolute;left:0;top:0;bottom:0;width:3px}
+  .stat .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+  .stat .v{font-size:28px;font-weight:700;margin-top:3px}
+  .stat.green .bar{background:var(--green)}.stat.green .v{color:var(--green)}
+  .stat.yellow .bar{background:var(--yellow)}.stat.yellow .v{color:var(--yellow)}
+  .stat.red .bar{background:var(--red)}.stat.red .v{color:var(--red)}
+  .stat.total .bar{background:var(--orange)}.stat.total .v{color:var(--orange)}
+  .layout{display:grid;grid-template-columns:1fr 430px;height:calc(100vh - 159px)}
+  #map{height:100%;background:#0d1117}.leaflet-container{background:#10161d}
+  .roster{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column}
+  .roster-head{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+  .roster-list{overflow-y:auto;flex:1;padding:10px}
+  .roster-list::-webkit-scrollbar{width:8px}.roster-list::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+  .card{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-bottom:9px;border-left-width:4px;transition:.15s}
+  .card.red{border-left-color:var(--red);background:linear-gradient(90deg,var(--red-bg),var(--panel-2) 60%)}
+  .card.yellow{border-left-color:var(--yellow);background:linear-gradient(90deg,var(--yellow-bg),var(--panel-2) 60%)}
+  .card.green{border-left-color:var(--green)}
+  .card.unknown{border-left-color:var(--grey);opacity:.8}
+  .card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .who .nm{font-size:14px;font-weight:600}.who .ro{font-size:11px;color:var(--muted);margin-top:1px}
+  .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:4px}
+  .dot.red{background:var(--red);box-shadow:0 0 10px var(--red);animation:pulse 1.4s infinite}
+  .dot.yellow{background:var(--yellow);box-shadow:0 0 8px var(--yellow);animation:pulse-light 2.4s infinite}
+  .dot.green{background:var(--green)}.dot.unknown{background:var(--grey)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes pulse-light{0%,100%{opacity:1}50%{opacity:.7}}
+  .metrics{display:flex;gap:16px;margin-top:11px}
+  .metric .ml{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .metric .mv{font-size:14px;font-weight:600;margin-top:1px}
+  .reasons{margin-top:10px;display:flex;flex-wrap:wrap;gap:5px}
+  .tag{font-size:10px;padding:3px 8px;border-radius:20px;font-weight:500;font-family:'IBM Plex Mono',monospace}
+  .tag.red{background:var(--red-bg);color:var(--red)}.tag.yellow{background:var(--yellow-bg);color:var(--yellow)}
+  .tag.ok{background:var(--green-bg);color:var(--green)}.tag.grey{background:rgba(91,102,117,.18);color:var(--grey)}
+  .actions{margin-top:11px;display:flex;gap:8px;align-items:center}
+  .ping{background:var(--orange);color:#0d1117;border:none;border-radius:7px;padding:7px 13px;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;transition:.15s}
+  .ping:hover{background:#ff7e38}.ping.sent{background:var(--green-bg);color:var(--green);cursor:default}
+  .last{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace}
+  .legend{position:absolute;bottom:16px;left:16px;z-index:500;background:rgba(21,27,35,.92);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:11px}
+  .legend .row{display:flex;align-items:center;gap:8px;margin:4px 0}.legend .sw{width:11px;height:11px;border-radius:50%}
+  .legend .note{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);color:var(--muted);font-size:10px;max-width:220px;line-height:1.5}
+  .src{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace}
+  .live-pill{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--green);font-family:'IBM Plex Mono',monospace}
+  .live-pill .d{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 1.4s infinite}
+  .leaflet-div-icon{background:transparent;border:none}
+  .mk{position:relative;width:20px;height:20px}
+  .mk-core{position:absolute;inset:0;margin:auto;width:12px;height:12px;border-radius:50%;z-index:2}
+  .mk::before{content:'';position:absolute;inset:0;margin:auto;width:12px;height:12px;border-radius:50%;z-index:1}
+  .mk-red .mk-core{background:var(--red);box-shadow:0 0 8px var(--red);animation:pulse 1.3s infinite}
+  .mk-red::before{background:var(--red);animation:halo-strong 1.3s ease-out infinite}
+  .mk-yellow .mk-core{background:var(--yellow)}
+  .mk-yellow::before{background:var(--yellow);animation:halo-light 2.6s ease-out infinite}
+  .mk-green .mk-core{background:var(--green);opacity:.85}
+  .mk-unknown .mk-core{background:var(--grey);opacity:.7}
+  @keyframes halo-strong{0%{transform:scale(.7);opacity:.65}100%{transform:scale(3);opacity:0}}
+  @keyframes halo-light{0%{transform:scale(.8);opacity:.3}100%{transform:scale(1.7);opacity:0}}
+  .empty{padding:30px 18px;color:var(--muted);font-size:13px;line-height:1.6}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">H</div>
+    <div><h1>Honor Global · PH Workforce Status Board</h1><p>Proactive disruption monitoring</p></div>
+  </div>
+  <div class="head-right">
+    <span class="live-pill"><span class="d"></span>LIVE</span>
+    <div class="clock"><div class="t num" id="clk">--:--</div><div class="d">MANILA TIME</div></div>
+    <button class="refresh" id="rf"><span class="ic">⟳</span> Refresh</button>
+  </div>
+</header>
+<div class="summary" id="sum"></div>
+<div class="layout">
+  <div style="position:relative">
+    <div id="map"></div>
+    <div class="legend">
+      <div class="row"><span class="sw" style="background:var(--green)"></span> Clear — no action</div>
+      <div class="row"><span class="sw" style="background:var(--yellow)"></span> Elevated — monitor</div>
+      <div class="row"><span class="sw" style="background:var(--red)"></span> High risk — auto check-in fires</div>
+      <div class="row"><span class="sw" style="background:var(--grey)"></span> No location set</div>
+      <div class="note">Weather is live (Open-Meteo), refreshed server-side every 15 min. Grey means that hire has no City / Province on their ClickUp card yet.</div>
+    </div>
+  </div>
+  <div class="roster">
+    <div class="roster-head"><span>Roster · sorted by risk</span><span class="src" id="upd">loading…</span></div>
+    <div class="roster-list" id="list"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const RANK={red:0,yellow:1,green:2,unknown:3};
+const COL={red:'#ff3b3b',yellow:'#ffb020',green:'#34c759',unknown:'#5b6675'};
+const STATE={hires:[],markers:{},map:null};
+
+STATE.map=L.map('map',{zoomControl:true,attributionControl:false}).setView([12.0,122.5],6);
+L.tileLayer('https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',{maxZoom:19}).addTo(STATE.map);
+
+function tick(){document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Manila'});}
+tick();setInterval(tick,1000);
+
+async function load(){
+  try{
+    const res=await fetch('/api/weather/status');
+    const data=await res.json();
+    STATE.hires=(data.hires||[]).map(h=>{
+      let reasons=h.reasons; if(typeof reasons==='string'){try{reasons=JSON.parse(reasons);}catch{reasons=[];}}
+      if(!Array.isArray(reasons)||!reasons.length) reasons=[{t: h.level==='unknown'?'No location set':'All clear', k: h.level==='unknown'?'grey':'ok'}];
+      return {...h, level:h.level||'unknown', precip:Number(h.precip_mm)||0, wind:Number(h.wind_kph)||0, reasons,
+        checked: h.checked_at? new Date(h.checked_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Manila'}) : '—',
+        sent:false};
+    });
+    render();
+  }catch(e){
+    document.getElementById('list').innerHTML='<div class="empty">Could not load status. Is the worker running and the API mounted?</div>';
+  }
+}
+
+function render(){
+  const sorted=[...STATE.hires].sort((a,b)=>RANK[a.level]-RANK[b.level]);
+  const c={red:0,yellow:0,green:0,unknown:0};STATE.hires.forEach(h=>c[h.level]++);
+  document.getElementById('sum').innerHTML=`
+    <div class="stat total"><div class="bar"></div><div class="lbl">Total active</div><div class="v num">${STATE.hires.length}</div></div>
+    <div class="stat green"><div class="bar"></div><div class="lbl">Clear</div><div class="v num">${c.green}</div></div>
+    <div class="stat yellow"><div class="bar"></div><div class="lbl">Elevated</div><div class="v num">${c.yellow}</div></div>
+    <div class="stat red"><div class="bar"></div><div class="lbl">High risk · check-in</div><div class="v num">${c.red}</div></div>`;
+
+  document.getElementById('list').innerHTML = sorted.length ? sorted.map(h=>`
+    <div class="card ${h.level}">
+      <div class="card-top">
+        <div class="who"><div class="nm">${esc(h.name)}</div><div class="ro">${esc(h.position||'')}${h.agency?' · '+esc(h.agency):''}${h.location?' · '+esc(h.location):''}</div></div>
+        <div class="dot ${h.level}"></div>
+      </div>
+      ${h.level!=='unknown'?`<div class="metrics">
+        <div class="metric"><div class="ml">Rain</div><div class="mv num">${h.precip.toFixed(1)}<span style="font-size:10px;color:var(--muted)">mm</span></div></div>
+        <div class="metric"><div class="ml">Wind</div><div class="mv num">${Math.round(h.wind)}<span style="font-size:10px;color:var(--muted)">km/h</span></div></div>
+        <div class="metric"><div class="ml">Last check</div><div class="mv num" style="font-size:12px">${h.checked}</div></div>
+      </div>`:''}
+      <div class="reasons">${h.reasons.map(r=>`<span class="tag ${r.k}">${esc(r.t)}</span>`).join('')}</div>
+      ${(h.level==='red'||h.level==='yellow')?`<div class="actions">
+        ${h.sent?`<button class="ping sent">✓ Check-in sent</button>`:`<button class="ping" onclick="ping('${h.clickup_id}',this)">⚡ Send Slack check-in</button>`}
+        <span class="last">auto-fires on RED</span>
+      </div>`:''}
+    </div>`).join('') : '<div class="empty">No active hires returned. Once people have a City / Province set in ClickUp and the sync runs, they will appear here.</div>';
+
+  Object.values(STATE.markers).forEach(m=>STATE.map.removeLayer(m));STATE.markers={};
+  STATE.hires.forEach(h=>{
+    if(h.latitude==null||h.longitude==null) return;
+    const icon=L.divIcon({className:'mk-wrap',html:`<div class="mk mk-${h.level}"><span class="mk-core"></span></div>`,iconSize:[20,20],iconAnchor:[10,10]});
+    STATE.markers[h.clickup_id]=L.marker([h.latitude,h.longitude],{icon}).addTo(STATE.map)
+      .bindPopup(`<b>${esc(h.name)}</b><br>${esc(h.location||'')}<br>Rain ${h.precip.toFixed(1)}mm · Wind ${Math.round(h.wind)}km/h`);
+  });
+  document.getElementById('upd').textContent='updated '+new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+}
+
+async function ping(id,btn){
+  btn.textContent='sending…';btn.disabled=true;
+  try{const r=await fetch('/api/weather/ping/'+id,{method:'POST'});const d=await r.json();
+    btn.className='ping sent';btn.textContent=d.sent?'✓ Check-in sent':'⚠ no Slack webhook set';}
+  catch{btn.className='ping sent';btn.textContent='⚠ failed';}
+}
+function esc(s){return String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+
+document.getElementById('rf').addEventListener('click',function(){this.classList.add('spin');load().then(()=>setTimeout(()=>this.classList.remove('spin'),500));});
+load();
+setInterval(load,120000); // soft auto-refresh every 2 min
+</script>
+</body>
+</html>
