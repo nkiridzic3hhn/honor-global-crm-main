@@ -60,7 +60,7 @@
   .roster-head{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
   .roster-list{overflow-y:auto;flex:1;min-height:0;padding:10px}
   .roster-list::-webkit-scrollbar{width:8px}.roster-list::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
-  .card{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-bottom:9px;border-left-width:4px;transition:.15s}
+  .card{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-bottom:9px;border-left-width:4px;transition:.15s;cursor:pointer}
   .card.red{border-left-color:var(--red);background:linear-gradient(90deg,var(--red-bg),var(--panel-2) 60%)}
   .card.yellow{border-left-color:var(--yellow);background:linear-gradient(90deg,var(--yellow-bg),var(--panel-2) 60%)}
   .card.green{border-left-color:var(--green)}
@@ -110,7 +110,8 @@
   .fhint{padding:8px 18px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted);display:none;align-items:center;justify-content:space-between;background:var(--panel-2)}
   .fhint.show{display:flex}
   .fhint a{color:var(--orange);cursor:pointer;text-decoration:none;font-weight:500}
-  .crow{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel-2);border:1px solid var(--line);border-left-width:4px;border-radius:8px;margin-bottom:6px}
+  .crow{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel-2);border:1px solid var(--line);border-left-width:4px;border-radius:8px;margin-bottom:6px;cursor:pointer}
+  .crow:hover,.card:hover{border-color:var(--muted)}
   .crow.red{border-left-color:var(--red)}.crow.yellow{border-left-color:var(--yellow)}.crow.green{border-left-color:var(--green)}.crow.unknown{border-left-color:var(--grey);opacity:.85}
   .crow .cnm{font-size:13px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .crow .cnm small{color:var(--muted);font-weight:400;font-size:11px}
@@ -218,14 +219,14 @@ function render(){
       :'No one in this category right now.')+'</div>';
   } else if(STATE.view==='compact'){
     listEl.innerHTML=shown.map(h=>`
-      <div class="crow ${h.level}">
+      <div class="crow ${h.level}" onclick="focusHire('${h.clickup_id}')">
         <span class="dot ${h.level}"></span>
         <div class="cnm">${esc(h.name)}${h.location?` <small>· ${esc(h.location)}</small>`:''}</div>
         <div class="cwx">${h.level==='unknown'?'no location':`<b>${h.precip.toFixed(1)}</b>mm · <b>${Math.round(h.wind)}</b>km/h`}</div>
       </div>`).join('');
   } else {
     listEl.innerHTML=shown.map(h=>`
-    <div class="card ${h.level}">
+    <div class="card ${h.level}" onclick="focusHire('${h.clickup_id}')">
       <div class="card-top">
         <div class="who"><div class="nm">${esc(h.name)}</div><div class="ro">${esc(h.position||'')}${h.agency?' · '+esc(h.agency):''}${h.location?' · '+esc(h.location):''}</div></div>
         <div class="dot ${h.level}"></div>
@@ -237,7 +238,7 @@ function render(){
       </div>`:''}
       <div class="reasons">${h.reasons.map(r=>`<span class="tag ${r.k}">${esc(r.t)}</span>`).join('')}</div>
       ${(h.level==='red'||h.level==='yellow')?`<div class="actions">
-        ${h.sent?`<button class="ping sent">✓ Check-in sent</button>`:`<button class="ping" onclick="ping('${h.clickup_id}',this)">⚡ Send Slack check-in</button>`}
+        ${h.sent?`<button class="ping sent">✓ Check-in sent</button>`:`<button class="ping" onclick="event.stopPropagation();ping('${h.clickup_id}',this)">⚡ Send Slack check-in</button>`}
         <span class="last">auto-fires on RED</span>
       </div>`:''}
     </div>`).join('');
@@ -288,6 +289,14 @@ function searchInput(){
     </div>`).join('')
     : '<div class="sr" style="cursor:default"><span class="srname" style="color:var(--muted)">No match</span></div>';
   QRES.classList.add('show');
+}
+
+function focusHire(id){
+  const h=STATE.hires.find(x=>String(x.clickup_id)===String(id));
+  if(!h || h.latitude==null || h.longitude==null) return;
+  STATE.map.flyTo([h.latitude,h.longitude], 11, {duration:.8});
+  const m=STATE.markers[h.clickup_id];
+  if(m) setTimeout(()=>m.openPopup(), 850);
 }
 
 function pickPerson(i){
