@@ -258,7 +258,7 @@ function render(){
   STATE.hires.forEach(h=>{
     h._mlat=null;h._mlon=null;
     if(h.latitude==null||h.longitude==null) return;
-    const k=Number(h.latitude).toFixed(2)+','+Number(h.longitude).toFixed(2);
+    const k=Number(h.latitude).toFixed(3)+','+Number(h.longitude).toFixed(3);
     (groups[k]=groups[k]||[]).push(h);
   });
   Object.values(groups).forEach(arr=>{

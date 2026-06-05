@@ -28,7 +28,7 @@ const YEL_PRECIP = 2.5;   // mm/h  moderate rain
 const YEL_WIND   = 25;    // km/h
 const RE_PING_HOURS = 3;  // if someone stays RED, don't re-ping more often than this
 const GEOCODE_DELAY_MS = 1100; // Nominatim asks for <= 1 req/sec
-const GEOCODE_VERSION = 3; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
+const GEOCODE_VERSION = 4; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
 
 let lastRun = null, lastCount = 0, running = false;
 export function weatherStatus() { return { lastRun, lastCount, running }; }
@@ -173,6 +173,26 @@ function isForeign(addr) {
   return tail.some(x => FOREIGN_COUNTRIES.has(x));
 }
 
+// Build barangay/district-level lookup queries from a full address, most specific first.
+// e.g. "Duplex 1, Kahayahay 2, Brgy. San Jose, Talamban, Cebu City"
+//   -> ["San Jose, Talamban, Cebu City", "Talamban, Cebu City", "Cebu City"]
+// This lets the geocoder place people at their actual part of town, not just the city centre.
+function barangayQueries(addr) {
+  addr = String(addr).replace(/\bCDO\b/ig, 'Cagayan de Oro').replace(/\bGen\.?\s?San\b/ig, 'General Santos').replace(/\bBGC\b/ig, 'Taguig').replace(/\bQ\.?\s?C\.?\b/ig, 'Quezon City');
+  let segs = addr.split(',').map(s => s.replace(/\b\d{4,}\b/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const UNIT = /^(unit|units|blk|block|lot|lots|duplex|bldg|building|phase|flr|floor|rm|room|door|apt|apartment|house|hse|no|number|#)\b/i;
+  let meaningful = segs.filter(s => !/^\d/.test(s) && !UNIT.test(s));
+  if (!meaningful.length) meaningful = segs;
+  meaningful = meaningful.map(s => s.replace(/^(brgy\.?|barangay)\s+/i, '').trim()).filter(Boolean);
+  const out = [];
+  const push = a => { const q = a.join(', '); if (q && !out.includes(q)) out.push(q); };
+  const n = meaningful.length;
+  if (n >= 3) push(meaningful.slice(-3));
+  if (n >= 2) push(meaningful.slice(-2));
+  if (n >= 1) push(meaningful.slice(-1));
+  return out.slice(0, 3);
+}
+
 async function geocodeMissing() {
   // First, clear any coordinates previously (wrongly) assigned to addresses outside the Philippines.
   const placed = await pool.query(`SELECT clickup_id, name, location FROM hires WHERE active = TRUE AND location IS NOT NULL AND location <> '' AND latitude IS NOT NULL`);
@@ -200,16 +220,19 @@ async function geocodeMissing() {
       console.log(`[weather] skip (outside PH): ${r.name} | ${r.location}`);
       continue;
     }
-    const { names, addrs } = placeCandidates(r.location);
+    const { names } = placeCandidates(r.location);
+    const nomQ = barangayQueries(r.location);
     let hit = null;
-    for (const n of names) {
-      try { hit = await geocodeOpenMeteo(n); } catch (e) { console.error('[weather] open-meteo err', e.message); }
+    // 1) Try barangay/district-level lookup first so people land on their actual part of town.
+    for (const q of nomQ) {
+      try { hit = await geocodeNominatim(q); } catch (e) { console.error('[weather] nominatim err', e.message); }
+      await sleep(GEOCODE_DELAY_MS);
       if (hit) break;
     }
+    // 2) Fall back to a city/town centre (Open-Meteo) only if the finer lookup found nothing.
     if (!hit) {
-      for (const q of addrs) {
-        try { hit = await geocodeNominatim(q); } catch (e) { console.error('[weather] nominatim err', e.message); }
-        await sleep(GEOCODE_DELAY_MS);
+      for (const n of names) {
+        try { hit = await geocodeOpenMeteo(n); } catch (e) { console.error('[weather] open-meteo err', e.message); }
         if (hit) break;
       }
     }
@@ -218,7 +241,7 @@ async function geocodeMissing() {
       okCount++;
     } else {
       missCount++;
-      console.log(`[weather] geocode MISS: ${r.name} | names=[${names.join(' | ')}] addrs=[${addrs.join(' | ')}]`);
+      console.log(`[weather] geocode MISS: ${r.name} | tried=[${nomQ.join(' | ')}] names=[${names.join(' | ')}]`);
       await logEvent('weather_geocode_miss', `Could not geocode "${r.location}" for ${r.name}`, { location: r.location });
     }
   }
