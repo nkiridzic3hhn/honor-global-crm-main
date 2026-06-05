@@ -90,6 +90,9 @@
   .src{font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace}
   .live-pill{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--green);font-family:'IBM Plex Mono',monospace}
   .live-pill .d{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 1.4s infinite}
+  .toast{position:absolute;top:16px;left:50%;transform:translateX(-50%) translateY(-12px);z-index:1200;background:rgba(21,27,35,.97);border:1px solid var(--line);color:var(--txt);padding:10px 16px;border-radius:10px;font-size:12px;line-height:1.5;box-shadow:0 12px 32px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;max-width:380px;text-align:center}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast b{color:var(--yellow)}
   .leaflet-div-icon{background:transparent;border:none}
   .mk{position:relative;width:20px;height:20px}
   .mk-core{position:absolute;inset:0;margin:auto;width:12px;height:12px;border-radius:50%;z-index:2}
@@ -141,6 +144,7 @@
 <div class="layout">
   <div style="position:relative">
     <div id="map"></div>
+    <div class="toast" id="toast"></div>
     <div class="legend">
       <div class="row"><span class="sw" style="background:var(--green)"></span> Clear — no action</div>
       <div class="row"><span class="sw" style="background:var(--yellow)"></span> Elevated — monitor</div>
@@ -310,9 +314,22 @@ function searchInput(){
   QRES.classList.add('show');
 }
 
+let toastT=null;
+function showToast(html){
+  const el=document.getElementById('toast');
+  el.innerHTML=html; el.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'), 3400);
+}
+
 function focusHire(id){
   const h=STATE.hires.find(x=>String(x.clickup_id)===String(id));
-  if(!h || h.latitude==null || h.longitude==null) return;
+  if(!h) return;
+  if(h.latitude==null || h.longitude==null){
+    showToast(h.location
+      ? `We have an address for <b>${esc(h.name)}</b> but couldn't turn it into a map point — it needs a clearer city/town, or it's outside the Philippines.`
+      : `<b>${esc(h.name)}</b> has no address in ClickUp yet, so there's nowhere to map.`);
+    return;
+  }
   const lat=h._mlat!=null?h._mlat:Number(h.latitude), lon=h._mlon!=null?h._mlon:Number(h.longitude);
   STATE.map.flyTo([lat,lon], 11, {duration:.8});
   const m=STATE.markers[h.clickup_id];
