@@ -36,6 +36,10 @@
   .stat.yellow .bar{background:var(--yellow)}.stat.yellow .v{color:var(--yellow)}
   .stat.red .bar{background:var(--red)}.stat.red .v{color:var(--red)}
   .stat.total .bar{background:var(--orange)}.stat.total .v{color:var(--orange)}
+  .stat.grey .bar{background:var(--grey)}.stat.grey .v{color:var(--grey)}
+  .stat{cursor:pointer;transition:border-color .15s,box-shadow .15s}
+  .stat:hover{border-color:var(--muted)}
+  .stat.sel{box-shadow:inset 0 0 0 1.6px rgba(230,237,243,.6)}
   .layout{display:grid;grid-template-columns:1fr 430px;flex:1;min-height:0}
   #map{height:100%;background:#0d1117}.leaflet-container{background:#10161d}
   .roster{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
@@ -85,6 +89,19 @@
   @keyframes halo-strong{0%{transform:scale(.7);opacity:.65}100%{transform:scale(3);opacity:0}}
   @keyframes halo-light{0%{transform:scale(.8);opacity:.3}100%{transform:scale(1.7);opacity:0}}
   .empty{padding:30px 18px;color:var(--muted);font-size:13px;line-height:1.6}
+  .rhctrl{display:flex;align-items:center;gap:10px}
+  .vtoggle{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  .vtoggle button{background:var(--panel-2);border:none;color:var(--muted);padding:5px 10px;font-family:inherit;font-size:11px;font-weight:500;cursor:pointer;letter-spacing:.3px}
+  .vtoggle button.on{background:var(--orange);color:#0d1117}
+  .fhint{padding:8px 18px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted);display:none;align-items:center;justify-content:space-between;background:var(--panel-2)}
+  .fhint.show{display:flex}
+  .fhint a{color:var(--orange);cursor:pointer;text-decoration:none;font-weight:500}
+  .crow{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel-2);border:1px solid var(--line);border-left-width:4px;border-radius:8px;margin-bottom:6px}
+  .crow.red{border-left-color:var(--red)}.crow.yellow{border-left-color:var(--yellow)}.crow.green{border-left-color:var(--green)}.crow.unknown{border-left-color:var(--grey);opacity:.85}
+  .crow .cnm{font-size:13px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .crow .cnm small{color:var(--muted);font-weight:400;font-size:11px}
+  .crow .cwx{font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;white-space:nowrap}
+  .crow .cwx b{color:var(--txt);font-weight:600}
 </style>
 </head>
 <body>
@@ -113,7 +130,17 @@
     </div>
   </div>
   <div class="roster">
-    <div class="roster-head"><span>Roster · sorted by risk</span><span class="src" id="upd">loading…</span></div>
+    <div class="roster-head">
+      <span id="rlabel">Roster · sorted by risk</span>
+      <div class="rhctrl">
+        <span class="src" id="upd">loading…</span>
+        <div class="vtoggle">
+          <button id="vExp" class="on" onclick="setView('expanded')">Expanded</button>
+          <button id="vCmp" onclick="setView('compact')">Compact</button>
+        </div>
+      </div>
+    </div>
+    <div class="fhint" id="fhint"><span id="fhintTxt"></span><a onclick="setFilter('all')">clear filter &#10005;</a></div>
     <div class="roster-list" id="list"></div>
   </div>
 </div>
@@ -122,7 +149,7 @@
 <script>
 const RANK={red:0,yellow:1,green:2,unknown:3};
 const COL={red:'#ff3b3b',yellow:'#ffb020',green:'#34c759',unknown:'#5b6675'};
-const STATE={hires:[],markers:{},map:null};
+const STATE={hires:[],markers:{},map:null,filter:'all',view:'expanded'};
 
 STATE.map=L.map('map',{zoomControl:true,attributionControl:false}).setView([12.0,122.5],6);
 L.tileLayer('https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',{maxZoom:19}).addTo(STATE.map);
@@ -150,13 +177,35 @@ async function load(){
 function render(){
   const sorted=[...STATE.hires].sort((a,b)=>RANK[a.level]-RANK[b.level]);
   const c={red:0,yellow:0,green:0,unknown:0};STATE.hires.forEach(h=>c[h.level]++);
+  const sel=l=>STATE.filter===l?' sel':'';
   document.getElementById('sum').innerHTML=`
-    <div class="stat total"><div class="bar"></div><div class="lbl">Total active</div><div class="v num">${STATE.hires.length}</div></div>
-    <div class="stat green"><div class="bar"></div><div class="lbl">Clear</div><div class="v num">${c.green}</div></div>
-    <div class="stat yellow"><div class="bar"></div><div class="lbl">Elevated</div><div class="v num">${c.yellow}</div></div>
-    <div class="stat red"><div class="bar"></div><div class="lbl">High risk · check-in</div><div class="v num">${c.red}</div></div>`;
+    <div class="stat total${sel('all')}" onclick="setFilter('all')"><div class="bar"></div><div class="lbl">Total active</div><div class="v num">${STATE.hires.length}</div></div>
+    <div class="stat green${sel('green')}" onclick="setFilter('green')"><div class="bar"></div><div class="lbl">Clear</div><div class="v num">${c.green}</div></div>
+    <div class="stat yellow${sel('yellow')}" onclick="setFilter('yellow')"><div class="bar"></div><div class="lbl">Elevated</div><div class="v num">${c.yellow}</div></div>
+    <div class="stat red${sel('red')}" onclick="setFilter('red')"><div class="bar"></div><div class="lbl">High risk · check-in</div><div class="v num">${c.red}</div></div>
+    <div class="stat grey${sel('unknown')}" onclick="setFilter('unknown')"><div class="bar"></div><div class="lbl">No location</div><div class="v num">${c.unknown}</div></div>`;
 
-  document.getElementById('list').innerHTML = sorted.length ? sorted.map(h=>`
+  const FL={all:'All',red:'High risk',yellow:'Elevated',green:'Clear',unknown:'No location'};
+  const shown = STATE.filter==='all' ? sorted : sorted.filter(h=>h.level===STATE.filter);
+  const fh=document.getElementById('fhint');
+  if(STATE.filter==='all'){ fh.classList.remove('show'); }
+  else{ fh.classList.add('show'); document.getElementById('fhintTxt').textContent=`Showing ${shown.length} · ${FL[STATE.filter]}`; }
+  document.getElementById('rlabel').textContent = STATE.view==='compact' ? 'Roster · compact' : 'Roster · sorted by risk';
+
+  const listEl=document.getElementById('list');
+  if(!shown.length){
+    listEl.innerHTML='<div class="empty">'+(STATE.filter==='all'
+      ?'No active hires returned. Once people have a City / Province set in ClickUp and the sync runs, they will appear here.'
+      :'No one in this category right now.')+'</div>';
+  } else if(STATE.view==='compact'){
+    listEl.innerHTML=shown.map(h=>`
+      <div class="crow ${h.level}">
+        <span class="dot ${h.level}"></span>
+        <div class="cnm">${esc(h.name)}${h.location?` <small>· ${esc(h.location)}</small>`:''}</div>
+        <div class="cwx">${h.level==='unknown'?'no location':`<b>${h.precip.toFixed(1)}</b>mm · <b>${Math.round(h.wind)}</b>km/h`}</div>
+      </div>`).join('');
+  } else {
+    listEl.innerHTML=shown.map(h=>`
     <div class="card ${h.level}">
       <div class="card-top">
         <div class="who"><div class="nm">${esc(h.name)}</div><div class="ro">${esc(h.position||'')}${h.agency?' · '+esc(h.agency):''}${h.location?' · '+esc(h.location):''}</div></div>
@@ -172,7 +221,8 @@ function render(){
         ${h.sent?`<button class="ping sent">✓ Check-in sent</button>`:`<button class="ping" onclick="ping('${h.clickup_id}',this)">⚡ Send Slack check-in</button>`}
         <span class="last">auto-fires on RED</span>
       </div>`:''}
-    </div>`).join('') : '<div class="empty">No active hires returned. Once people have a City / Province set in ClickUp and the sync runs, they will appear here.</div>';
+    </div>`).join('');
+  }
 
   Object.values(STATE.markers).forEach(m=>STATE.map.removeLayer(m));STATE.markers={};
   STATE.hires.forEach(h=>{
@@ -191,6 +241,14 @@ async function ping(id,btn){
   catch{btn.className='ping sent';btn.textContent='⚠ failed';}
 }
 function esc(s){return String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+
+function setFilter(f){ STATE.filter = (f===STATE.filter && f!=='all') ? 'all' : f; render(); }
+function setView(v){
+  STATE.view=v;
+  document.getElementById('vExp').classList.toggle('on',v==='expanded');
+  document.getElementById('vCmp').classList.toggle('on',v==='compact');
+  render();
+}
 
 document.getElementById('rf').addEventListener('click',function(){this.classList.add('spin');load().then(()=>setTimeout(()=>this.classList.remove('spin'),500));});
 load();
