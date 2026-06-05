@@ -73,24 +73,38 @@ function score(precip, wind, code) {
 // ---------- geocoding (Open-Meteo geocoder + Nominatim fallback; both free, no key) ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// Philippine provinces (+ Metro Manila) so we can resolve town-level and province-level addresses.
+const PH_PROVINCES = ['Abra','Agusan del Norte','Agusan del Sur','Aklan','Albay','Antique','Apayao','Aurora','Basilan','Bataan','Batanes','Batangas','Benguet','Biliran','Bohol','Bukidnon','Bulacan','Cagayan','Camarines Norte','Camarines Sur','Camiguin','Capiz','Catanduanes','Cavite','Cebu','Cotabato','Davao de Oro','Davao del Norte','Davao del Sur','Davao Occidental','Davao Oriental','Dinagat Islands','Eastern Samar','Guimaras','Ifugao','Ilocos Norte','Ilocos Sur','Iloilo','Isabela','Kalinga','La Union','Laguna','Lanao del Norte','Lanao del Sur','Leyte','Maguindanao','Marinduque','Masbate','Misamis Occidental','Misamis Oriental','Mountain Province','Negros Occidental','Negros Oriental','Northern Samar','Nueva Ecija','Nueva Vizcaya','Occidental Mindoro','Oriental Mindoro','Palawan','Pampanga','Pangasinan','Quezon','Quirino','Rizal','Romblon','Samar','Sarangani','Siquijor','Sorsogon','South Cotabato','Southern Leyte','Sultan Kudarat','Sulu','Surigao del Norte','Surigao del Sur','Tarlac','Tawi-Tawi','Zambales','Zamboanga del Norte','Zamboanga del Sur','Zamboanga Sibugay','Metro Manila'];
+
 // Turn a messy PH address into geocodable candidates, most specific first.
 function placeCandidates(addr) {
-  const a = String(addr).replace(/\s+/g, ' ').trim();
+  let a = String(addr).replace(/\s+/g, ' ').trim();
+  a = a.replace(/\bphilippines\b/ig, ' ').replace(/\b\d{4}\b/g, ' ').replace(/\s+/g, ' ').trim(); // drop "Philippines" and zip codes
   const out = [];
-  const re = /([^\s,]+(?:\s+[^\s,]+){0,3}\s+City)\b/gi; // grab "<words> City"
-  let m, last = null;
-  while ((m = re.exec(a))) last = m[1];
-  if (last) {
-    last = last.replace(/\s+/g, ' ').trim();
-    const w = last.split(' ');
-    out.push(last);                                            // "Bankal Lapu-Lapu City"
-    if (w.length > 2) out.push(w.slice(-2).join(' '));         // "Lapu-Lapu City"
-    out.push(last.replace(/\s+City$/i, ''));                   // "Bankal Lapu-Lapu"
-    if (w.length > 2) out.push(w.slice(-2).join(' ').replace(/\s+City$/i, '')); // "Lapu-Lapu"
+  const push = v => { v = String(v).replace(/^[,\s]+|[,\s]+$/g, '').replace(/\s+/g, ' ').trim(); if (v) out.push(v); };
+
+  // "CITY OF X" -> "X City"
+  const cof = a.match(/City of ([^\s,]+(?:\s+[^\s,]+){0,2})/i);
+  if (cof) push(cof[1] + ' City');
+
+  // "<words> City"
+  const cityRe = /([^\s,]+(?:\s+[^\s,]+){0,2}\s+City)\b/gi;
+  let last = null, mm;
+  while ((mm = cityRe.exec(a))) last = mm[1];
+  if (last) { const w = last.trim().split(' '); push(last); if (w.length > 2) push(w.slice(-2).join(' ')); push(last.replace(/\s+City$/i, '')); }
+
+  // municipality + known province (and province alone as a safe fallback)
+  const prov = PH_PROVINCES.find(p => new RegExp('\\b' + p.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '\\b', 'i').test(a));
+  if (prov) {
+    const idx = a.toLowerCase().indexOf(prov.toLowerCase());
+    const toks = a.slice(0, idx).split(/[\s,]+/).filter(Boolean);
+    if (toks.length) { push(toks.slice(-2).join(' ') + ', ' + prov); push(toks.slice(-1).join(' ') + ', ' + prov); }
+    push(prov); // province-level coordinate is fine for weather
   }
+
   const parts = a.split(',').map(s => s.trim()).filter(Boolean);
-  if (parts.length) out.push(parts[parts.length - 1]);         // last comma chunk
-  out.push(a);                                                 // whole string, last resort
+  if (parts.length) push(parts[parts.length - 1]);
+  push(a);
   return [...new Set(out)].filter(Boolean);
 }
 
