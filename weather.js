@@ -102,6 +102,12 @@ function placeCandidates(addr) {
     push(prov); // province-level coordinate is fine for weather
   }
 
+  // well-known cities often written WITHOUT "City" and with no province (esp. Metro Manila)
+  const PH_CITIES = ['Makati','Mandaluyong','Marikina','Muntinlupa','Pasig','Pasay','Taguig','Caloocan','Valenzuela','Manila','Bacoor','Dasmarinas','Antipolo','Cainta','Taytay','Binan','Calamba','Santa Rosa','Cabuyao','Bacolod','Iloilo','Davao','Cagayan de Oro','Zamboanga','General Santos','Baguio','Angeles'];
+  for (const c of PH_CITIES) {
+    if (new RegExp('\\b' + c.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '\\b', 'i').test(a)) { push(c); break; }
+  }
+
   const parts = a.split(',').map(s => s.trim()).filter(Boolean);
   if (parts.length) push(parts[parts.length - 1]);
   push(a);
