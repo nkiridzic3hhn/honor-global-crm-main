@@ -12,8 +12,8 @@ const FIELD = {
 
 const ACTIVE_STATUS = (process.env.ACTIVE_STATUS || 'stage 8: hired - active').toLowerCase();
 
-// NEW: id of the "City / Province" custom field, set in Railway as CLICKUP_LOCATION_FIELD_ID
-const LOCATION_FIELD_ID = process.env.CLICKUP_LOCATION_FIELD_ID || '';
+// Location source: ClickUp "PA: Address" field (id below). Override via CLICKUP_LOCATION_FIELD_ID if needed.
+const LOCATION_FIELD_ID = process.env.CLICKUP_LOCATION_FIELD_ID || '056719ce-31fb-4e5e-8433-3b931db78798'; // PA: Address
 
 function headers() {
   const token = process.env.CLICKUP_TOKEN;
