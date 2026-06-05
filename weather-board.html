@@ -103,6 +103,8 @@
   .mk-yellow::before{background:var(--yellow);animation:halo-light 2.6s ease-out infinite}
   .mk-green .mk-core{background:var(--green);opacity:.85}
   .mk-unknown .mk-core{background:var(--grey);opacity:.7}
+  .mkc{display:grid;place-items:center;border-radius:50%;font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:12px;color:#0d1117;box-shadow:0 0 0 2px rgba(13,17,23,.55),0 0 0 3px rgba(255,255,255,.18);cursor:pointer}
+  .mkc.red{background:var(--red)}.mkc.yellow{background:var(--yellow)}.mkc.green{background:var(--green)}.mkc.unknown{background:var(--grey)}
   @keyframes halo-strong{0%{transform:scale(.7);opacity:.65}100%{transform:scale(3);opacity:0}}
   @keyframes halo-light{0%{transform:scale(.8);opacity:.3}100%{transform:scale(1.7);opacity:0}}
   .empty{padding:30px 18px;color:var(--muted);font-size:13px;line-height:1.6}
@@ -150,7 +152,7 @@
       <div class="row"><span class="sw" style="background:var(--yellow)"></span> Elevated — monitor</div>
       <div class="row"><span class="sw" style="background:var(--red)"></span> High risk — auto check-in fires</div>
       <div class="row"><span class="sw" style="background:var(--grey)"></span> No location set</div>
-      <div class="note">Weather is live (Open-Meteo), refreshed server-side every 15 min. Grey means that hire has no City / Province on their ClickUp card yet.</div>
+      <div class="note">Weather is live (Open-Meteo), refreshed every 15 min. A numbered pin means several staff are in that town (addresses resolve to town level) — click it to list them. Grey means no usable location yet.</div>
     </div>
   </div>
   <div class="roster">
@@ -249,30 +251,36 @@ function render(){
   }
 
   Object.values(STATE.markers).forEach(m=>STATE.map.removeLayer(m));STATE.markers={};
-  // Group everyone who resolved to the same point (same town centre) so we can fan them
-  // out into separate, individually-clickable dots instead of stacking them on one pixel.
+  // These addresses only resolve to town level, so many people share one point.
+  // Group them and show ONE pin per town with a count (clicking lists who's there),
+  // rather than inventing scattered fake positions.
   const groups={};
   STATE.hires.forEach(h=>{
     h._mlat=null;h._mlon=null;
     if(h.latitude==null||h.longitude==null) return;
-    const k=Number(h.latitude).toFixed(3)+','+Number(h.longitude).toFixed(3);
+    const k=Number(h.latitude).toFixed(2)+','+Number(h.longitude).toFixed(2);
     (groups[k]=groups[k]||[]).push(h);
   });
   Object.values(groups).forEach(arr=>{
-    arr.forEach((h,i)=>{
-      let lat=Number(h.latitude), lon=Number(h.longitude);
-      if(arr.length>1){
-        const perRing=10, ring=1+Math.floor(i/perRing);
-        const ang=(2*Math.PI*(i%perRing))/Math.min(arr.length,perRing);
-        const R=0.012*ring; // ~1.3 km per ring, so co-located people fan out around their town
-        lat+=R*Math.sin(ang);
-        lon+=R*Math.cos(ang)/Math.cos(lat*Math.PI/180);
-      }
-      h._mlat=lat;h._mlon=lon;
-      const icon=L.divIcon({className:'mk-wrap',html:`<div class="mk mk-${h.level}"><span class="mk-core"></span></div>`,iconSize:[20,20],iconAnchor:[10,10]});
-      STATE.markers[h.clickup_id]=L.marker([lat,lon],{icon}).addTo(STATE.map)
+    const lat=Number(arr[0].latitude), lon=Number(arr[0].longitude);
+    arr.forEach(h=>{h._mlat=lat;h._mlon=lon;});
+    const worstRank=arr.reduce((w,h)=>Math.min(w,RANK[h.level]),3);
+    const wl=Object.keys(RANK).find(k=>RANK[k]===worstRank)||'unknown';
+    let icon, m;
+    if(arr.length===1){
+      icon=L.divIcon({className:'mk-wrap',html:`<div class="mk mk-${wl}"><span class="mk-core"></span></div>`,iconSize:[20,20],iconAnchor:[10,10]});
+      const h=arr[0];
+      m=L.marker([lat,lon],{icon}).addTo(STATE.map)
         .bindPopup(`<b>${esc(h.name)}</b><br>${esc(h.location||'')}<br>Rain ${h.precip.toFixed(1)}mm · Wind ${Math.round(h.wind)}km/h`);
-    });
+    } else {
+      const sz=Math.min(42, 22+arr.length);
+      icon=L.divIcon({className:'mk-wrap',html:`<div class="mkc ${wl}" style="width:${sz}px;height:${sz}px">${arr.length}</div>`,iconSize:[sz,sz],iconAnchor:[sz/2,sz/2]});
+      const items=arr.slice(0,18).map(h=>`<div style="display:flex;align-items:center;gap:6px;margin-top:3px"><span style="width:8px;height:8px;border-radius:50%;background:${COL[h.level]};display:inline-block;flex:none"></span>${esc(h.name)}</div>`).join('');
+      const more=arr.length>18?`<div style="margin-top:5px;color:#8b97a6">+${arr.length-18} more</div>`:'';
+      m=L.marker([lat,lon],{icon}).addTo(STATE.map)
+        .bindPopup(`<b>${arr.length} staff in this area</b><div style="margin-top:6px;max-height:190px;overflow:auto">${items}${more}</div>`,{maxWidth:250});
+    }
+    arr.forEach(h=>{ STATE.markers[h.clickup_id]=m; });
   });
   document.getElementById('upd').textContent='updated '+new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
 }
