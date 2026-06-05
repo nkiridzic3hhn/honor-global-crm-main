@@ -75,7 +75,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // Philippine provinces (+ Metro Manila) so we can resolve town-level and province-level addresses.
 const PH_PROVINCES = ['Abra','Agusan del Norte','Agusan del Sur','Aklan','Albay','Antique','Apayao','Aurora','Basilan','Bataan','Batanes','Batangas','Benguet','Biliran','Bohol','Bukidnon','Bulacan','Cagayan','Camarines Norte','Camarines Sur','Camiguin','Capiz','Catanduanes','Cavite','Cebu','Cotabato','Davao de Oro','Davao del Norte','Davao del Sur','Davao Occidental','Davao Oriental','Dinagat Islands','Eastern Samar','Guimaras','Ifugao','Ilocos Norte','Ilocos Sur','Iloilo','Isabela','Kalinga','La Union','Laguna','Lanao del Norte','Lanao del Sur','Leyte','Maguindanao','Marinduque','Masbate','Misamis Occidental','Misamis Oriental','Mountain Province','Negros Occidental','Negros Oriental','Northern Samar','Nueva Ecija','Nueva Vizcaya','Occidental Mindoro','Oriental Mindoro','Palawan','Pampanga','Pangasinan','Quezon','Quirino','Rizal','Romblon','Samar','Sarangani','Siquijor','Sorsogon','South Cotabato','Southern Leyte','Sultan Kudarat','Sulu','Surigao del Norte','Surigao del Sur','Tarlac','Tawi-Tawi','Zambales','Zamboanga del Norte','Zamboanga del Sur','Zamboanga Sibugay','Metro Manila'];
-const PH_CITIES = ['Makati','Mandaluyong','Marikina','Muntinlupa','Pasig','Pasay','Taguig','Caloocan','Valenzuela','Manila','Bacoor','Dasmarinas','Antipolo','Cainta','Taytay','Binan','Calamba','Santa Rosa','Cabuyao','Bacolod','Iloilo','Davao','Cagayan de Oro','Zamboanga','General Santos','Baguio','Angeles'];
+const PH_CITIES = ['Makati','Mandaluyong','Marikina','Muntinlupa','Pasig','Pasay','Taguig','Caloocan','Valenzuela','Manila','Bacoor','Dasmarinas','Antipolo','Cainta','Taytay','Binan','Calamba','Santa Rosa','Cabuyao','Bacolod','Iloilo','Davao','Cagayan de Oro','Zamboanga','General Santos','Baguio','Angeles','Las Pi\u00f1as','Para\u00f1aque'];
+// Well-known barangays / subdivisions that are usually written WITHOUT their city.
+const GEO_HINTS = { 'bajada': 'Davao City', 'bago gallera': 'Davao City', 'matina': 'Davao City', 'lanang': 'Davao City', 'bf homes': 'Las Pi\u00f1as', 'bf international': 'Las Pi\u00f1as' };
 const GEO_STOP = new Set(['blk','block','lot','brgy','barangay','purok','sitio','zone','phase','ph','unit','bldg','st','street','ave','avenue','rd','road','blvd','subd','subdivision','village','homes','residences','tower','no','door','floor','flr','rm','room','pob','poblacion']);
 const escRe = s => s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 const cleanStr = v => String(v).replace(/^[,\s]+|[,\s]+$/g, '').replace(/\s+/g, ' ').trim();
@@ -84,10 +86,17 @@ const cleanStr = v => String(v).replace(/^[,\s]+|[,\s]+$/g, '').replace(/\s+/g, 
 // names[] = bare place names for Open-Meteo; addrs[] = richer strings for Nominatim.
 function placeCandidates(addr) {
   let a = String(addr).replace(/\s+/g, ' ').trim();
+  a = a.replace(/\bCDO\b/ig, 'Cagayan de Oro').replace(/\bGen\.?\s?San\b/ig, 'General Santos').replace(/\bBGC\b/ig, 'Taguig').replace(/\bQ\.?\s?C\.?\b/ig, 'Quezon City');
   a = a.replace(/\bphilippines\b/ig, ' ').replace(/\b\d{4,}\b/g, ' ').replace(/\s+/g, ' ').trim();
   const names = [], addrs = [];
   const addName = v => { v = cleanStr(v); if (v && !names.includes(v)) names.push(v); };
   const addAddr = v => { v = cleanStr(v); if (v && !addrs.includes(v)) addrs.push(v); };
+
+  for (const c of PH_CITIES) { if (new RegExp('\\b' + escRe(c) + '\\b', 'i').test(a)) { addName(c); break; } }
+
+  const al = a.toLowerCase();
+  for (const k in GEO_HINTS) { if (al.includes(k)) { addName(GEO_HINTS[k]); break; } }
+
 
   const cof = a.match(/City of ([^\s,]+(?:\s+[^\s,]+){0,2})/i);
   if (cof) { addName(cof[1] + ' City'); addName(cof[1]); }
@@ -115,8 +124,6 @@ function placeCandidates(addr) {
     addName(prov);
     addAddr(prov);
   }
-
-  for (const c of PH_CITIES) { if (new RegExp('\\b' + escRe(c) + '\\b', 'i').test(a)) { addName(c); break; } }
 
   addAddr(a);
   return { names, addrs };
