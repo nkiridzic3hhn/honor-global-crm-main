@@ -149,7 +149,29 @@ async function geocodeNominatim(q) {
   return hits.length ? { lat: Number(hits[0].lat), lon: Number(hits[0].lon) } : null;
 }
 
+// Addresses clearly outside the Philippines must never be force-placed on a PH map.
+const FOREIGN_COUNTRIES = new Set(['armenia','peru','colombia','argentina','mexico','brazil','brasil','chile','venezuela','ecuador','bolivia','paraguay','uruguay','guatemala','honduras','nicaragua','el salvador','costa rica','panama','dominican republic','cuba','jamaica','egypt','morocco','nigeria','ghana','kenya','uganda','tanzania','south africa','india','pakistan','bangladesh','nepal','sri lanka','indonesia','malaysia','thailand','vietnam','cambodia','china','japan','south korea','korea','taiwan','united states','usa','u.s.a','u.s','canada','united kingdom','uk','ireland','australia','new zealand','spain','portugal','france','germany','netherlands','belgium','italy','greece','turkey','russia','ukraine','poland','romania','georgia','azerbaijan','kazakhstan','iran','iraq','israel','palestine','lebanon','syria','jordan','saudi arabia','united arab emirates','uae','qatar','kuwait','bahrain','oman','yemen','afghanistan']);
+function isForeign(addr) {
+  if (!addr) return false;
+  const segs = String(addr).split(',').map(x => x.trim().toLowerCase().replace(/\.+$/, '')).filter(Boolean);
+  if (!segs.length) return false;
+  const tail = segs.slice(-2);
+  if (tail.includes('philippines') || tail.includes('ph')) return false;
+  return tail.some(x => FOREIGN_COUNTRIES.has(x));
+}
+
 async function geocodeMissing() {
+  // First, clear any coordinates previously (wrongly) assigned to addresses outside the Philippines.
+  const placed = await pool.query(`SELECT clickup_id, name, location FROM hires WHERE active = TRUE AND location IS NOT NULL AND location <> '' AND latitude IS NOT NULL`);
+  let cleared = 0;
+  for (const r of placed.rows) {
+    if (isForeign(r.location)) {
+      await pool.query(`UPDATE hires SET latitude=NULL, longitude=NULL, geocoded_location=NULL WHERE clickup_id=$1`, [r.clickup_id]);
+      cleared++;
+      console.log(`[weather] cleared off-map placement (outside PH): ${r.name} | ${r.location}`);
+    }
+  }
+
   const { rows } = await pool.query(`
     SELECT clickup_id, name, location
     FROM hires
@@ -158,7 +180,13 @@ async function geocodeMissing() {
       AND (latitude IS NULL OR geocoded_location IS DISTINCT FROM location)
   `);
   let okCount = 0, missCount = 0;
+  let foreignCount = 0;
   for (const r of rows) {
+    if (isForeign(r.location)) {
+      foreignCount++;
+      console.log(`[weather] skip (outside PH): ${r.name} | ${r.location}`);
+      continue;
+    }
     const { names, addrs } = placeCandidates(r.location);
     let hit = null;
     for (const n of names) {
@@ -181,7 +209,7 @@ async function geocodeMissing() {
       await logEvent('weather_geocode_miss', `Could not geocode "${r.location}" for ${r.name}`, { location: r.location });
     }
   }
-  console.log(`[weather] geocode pass complete: ${okCount} located, ${missCount} missed, ${rows.length} processed`);
+  console.log(`[weather] geocode pass complete: ${okCount} located, ${missCount} missed, ${foreignCount} outside PH, ${cleared} cleared, ${rows.length} processed`);
 }
 
 // ---------- weather fetch (Open-Meteo, free, no key) ----------
