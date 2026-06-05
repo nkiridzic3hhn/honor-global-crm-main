@@ -70,8 +70,48 @@ function score(precip, wind, code) {
   return { level, reasons };
 }
 
-// ---------- geocoding (OpenStreetMap Nominatim, free, no key) ----------
+// ---------- geocoding (Open-Meteo geocoder + Nominatim fallback; both free, no key) ----------
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Turn a messy PH address into geocodable candidates, most specific first.
+function placeCandidates(addr) {
+  const a = String(addr).replace(/\s+/g, ' ').trim();
+  const out = [];
+  const re = /([^\s,]+(?:\s+[^\s,]+){0,3}\s+City)\b/gi; // grab "<words> City"
+  let m, last = null;
+  while ((m = re.exec(a))) last = m[1];
+  if (last) {
+    last = last.replace(/\s+/g, ' ').trim();
+    const w = last.split(' ');
+    out.push(last);                                            // "Bankal Lapu-Lapu City"
+    if (w.length > 2) out.push(w.slice(-2).join(' '));         // "Lapu-Lapu City"
+    out.push(last.replace(/\s+City$/i, ''));                   // "Bankal Lapu-Lapu"
+    if (w.length > 2) out.push(w.slice(-2).join(' ').replace(/\s+City$/i, '')); // "Lapu-Lapu"
+  }
+  const parts = a.split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length) out.push(parts[parts.length - 1]);         // last comma chunk
+  out.push(a);                                                 // whole string, last resort
+  return [...new Set(out)].filter(Boolean);
+}
+
+// Open-Meteo geocoder: reliable from servers, no key, no rate-limit headaches.
+async function geocodeOpenMeteo(name) {
+  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=5&language=en&format=json`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const d = await res.json();
+  const r = (d.results || []).find(x => x.country_code === 'PH') || null;
+  return r ? { lat: r.latitude, lon: r.longitude } : null;
+}
+
+// Nominatim fallback for full free-form addresses.
+async function geocodeNominatim(addr) {
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addr)}&format=json&limit=1&countrycodes=ph`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'HonorGlobalCRM/1.0 (workforce ops; contact ops@staffhero.co)' } });
+  if (!res.ok) return null;
+  const hits = await res.json();
+  return hits.length ? { lat: Number(hits[0].lat), lon: Number(hits[0].lon) } : null;
+}
 
 async function geocodeMissing() {
   // only geocode active people whose location text is set and whose coords are missing or stale
@@ -82,27 +122,35 @@ async function geocodeMissing() {
       AND location IS NOT NULL AND location <> ''
       AND (latitude IS NULL OR geocoded_location IS DISTINCT FROM location)
   `);
+  let okCount = 0, missCount = 0;
   for (const r of rows) {
+    let hit = null;
     try {
-      const q = encodeURIComponent(`${r.location}, Philippines`);
-      const url = `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`;
-      const res = await fetch(url, { headers: { 'User-Agent': 'HonorGlobalCRM/1.0 (workforce ops monitoring)' } });
-      if (res.ok) {
-        const hits = await res.json();
-        if (hits.length) {
-          await pool.query(
-            `UPDATE hires SET latitude=$1, longitude=$2, geocoded_location=$3 WHERE clickup_id=$4`,
-            [Number(hits[0].lat), Number(hits[0].lon), r.location, r.clickup_id]
-          );
-        } else {
-          await logEvent('weather_geocode_miss', `Could not geocode "${r.location}" for ${r.name}`, { location: r.location });
-        }
+      for (const cand of placeCandidates(r.location)) {
+        hit = await geocodeOpenMeteo(cand);
+        if (hit) break;
       }
-    } catch (e) {
-      console.error('[weather] geocode failed for', r.name, e.message);
+    } catch (e) { console.error('[weather] open-meteo geocode error for', r.name, e.message); }
+
+    if (!hit) {
+      try { hit = await geocodeNominatim(r.location); }
+      catch (e) { console.error('[weather] nominatim error for', r.name, e.message); }
+      await sleep(GEOCODE_DELAY_MS); // only throttle the Nominatim fallback
     }
-    await sleep(GEOCODE_DELAY_MS); // be a good Nominatim citizen
+
+    if (hit) {
+      await pool.query(
+        `UPDATE hires SET latitude=$1, longitude=$2, geocoded_location=$3 WHERE clickup_id=$4`,
+        [hit.lat, hit.lon, r.location, r.clickup_id]
+      );
+      okCount++;
+    } else {
+      missCount++;
+      console.log(`[weather] geocode MISS: ${r.name} -> "${r.location}"`);
+      await logEvent('weather_geocode_miss', `Could not geocode "${r.location}" for ${r.name}`, { location: r.location });
+    }
   }
+  console.log(`[weather] geocode pass complete: ${okCount} located, ${missCount} missed, ${rows.length} processed`);
 }
 
 // ---------- weather fetch (Open-Meteo, free, no key) ----------
