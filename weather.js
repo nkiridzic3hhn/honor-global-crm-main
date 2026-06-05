@@ -75,46 +75,54 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // Philippine provinces (+ Metro Manila) so we can resolve town-level and province-level addresses.
 const PH_PROVINCES = ['Abra','Agusan del Norte','Agusan del Sur','Aklan','Albay','Antique','Apayao','Aurora','Basilan','Bataan','Batanes','Batangas','Benguet','Biliran','Bohol','Bukidnon','Bulacan','Cagayan','Camarines Norte','Camarines Sur','Camiguin','Capiz','Catanduanes','Cavite','Cebu','Cotabato','Davao de Oro','Davao del Norte','Davao del Sur','Davao Occidental','Davao Oriental','Dinagat Islands','Eastern Samar','Guimaras','Ifugao','Ilocos Norte','Ilocos Sur','Iloilo','Isabela','Kalinga','La Union','Laguna','Lanao del Norte','Lanao del Sur','Leyte','Maguindanao','Marinduque','Masbate','Misamis Occidental','Misamis Oriental','Mountain Province','Negros Occidental','Negros Oriental','Northern Samar','Nueva Ecija','Nueva Vizcaya','Occidental Mindoro','Oriental Mindoro','Palawan','Pampanga','Pangasinan','Quezon','Quirino','Rizal','Romblon','Samar','Sarangani','Siquijor','Sorsogon','South Cotabato','Southern Leyte','Sultan Kudarat','Sulu','Surigao del Norte','Surigao del Sur','Tarlac','Tawi-Tawi','Zambales','Zamboanga del Norte','Zamboanga del Sur','Zamboanga Sibugay','Metro Manila'];
+const PH_CITIES = ['Makati','Mandaluyong','Marikina','Muntinlupa','Pasig','Pasay','Taguig','Caloocan','Valenzuela','Manila','Bacoor','Dasmarinas','Antipolo','Cainta','Taytay','Binan','Calamba','Santa Rosa','Cabuyao','Bacolod','Iloilo','Davao','Cagayan de Oro','Zamboanga','General Santos','Baguio','Angeles'];
+const GEO_STOP = new Set(['blk','block','lot','brgy','barangay','purok','sitio','zone','phase','ph','unit','bldg','st','street','ave','avenue','rd','road','blvd','subd','subdivision','village','homes','residences','tower','no','door','floor','flr','rm','room','pob','poblacion']);
+const escRe = s => s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+const cleanStr = v => String(v).replace(/^[,\s]+|[,\s]+$/g, '').replace(/\s+/g, ' ').trim();
 
-// Turn a messy PH address into geocodable candidates, most specific first.
+// Build candidates from a messy PH address.
+// names[] = bare place names for Open-Meteo; addrs[] = richer strings for Nominatim.
 function placeCandidates(addr) {
   let a = String(addr).replace(/\s+/g, ' ').trim();
-  a = a.replace(/\bphilippines\b/ig, ' ').replace(/\b\d{4}\b/g, ' ').replace(/\s+/g, ' ').trim(); // drop "Philippines" and zip codes
-  const out = [];
-  const push = v => { v = String(v).replace(/^[,\s]+|[,\s]+$/g, '').replace(/\s+/g, ' ').trim(); if (v) out.push(v); };
+  a = a.replace(/\bphilippines\b/ig, ' ').replace(/\b\d{4,}\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const names = [], addrs = [];
+  const addName = v => { v = cleanStr(v); if (v && !names.includes(v)) names.push(v); };
+  const addAddr = v => { v = cleanStr(v); if (v && !addrs.includes(v)) addrs.push(v); };
 
-  // "CITY OF X" -> "X City"
   const cof = a.match(/City of ([^\s,]+(?:\s+[^\s,]+){0,2})/i);
-  if (cof) push(cof[1] + ' City');
+  if (cof) { addName(cof[1] + ' City'); addName(cof[1]); }
 
-  // "<words> City"
   const cityRe = /([^\s,]+(?:\s+[^\s,]+){0,2}\s+City)\b/gi;
   let last = null, mm;
   while ((mm = cityRe.exec(a))) last = mm[1];
-  if (last) { const w = last.trim().split(' '); push(last); if (w.length > 2) push(w.slice(-2).join(' ')); push(last.replace(/\s+City$/i, '')); }
+  if (last) {
+    const c = cleanStr(last), w = c.split(' ');
+    addName(c);
+    if (w.length > 2) addName(w.slice(-2).join(' '));
+    addName(c.replace(/\s+City$/i, ''));
+    if (w.length > 2) addName(w.slice(-2).join(' ').replace(/\s+City$/i, ''));
+  }
 
-  // municipality + known province (and province alone as a safe fallback)
-  const prov = PH_PROVINCES.find(p => new RegExp('\\b' + p.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '\\b', 'i').test(a));
+  const prov = PH_PROVINCES.find(p => new RegExp('\\b' + escRe(p) + '\\b', 'i').test(a));
   if (prov) {
     const idx = a.toLowerCase().indexOf(prov.toLowerCase());
-    const toks = a.slice(0, idx).split(/[\s,]+/).filter(Boolean);
-    if (toks.length) { push(toks.slice(-2).join(' ') + ', ' + prov); push(toks.slice(-1).join(' ') + ', ' + prov); }
-    push(prov); // province-level coordinate is fine for weather
+    const toks = a.slice(0, idx).split(/[\s,]+/).filter(t => t && !/\d/.test(t) && !GEO_STOP.has(t.toLowerCase().replace(/\.$/, '')));
+    const m1 = toks.slice(-1).join(' '), m2 = toks.slice(-2).join(' ');
+    if (m2 && m2 !== m1) addName(m2);
+    if (m1) addName(m1);
+    if (m2 && m2 !== m1) addAddr(m2 + ', ' + prov);
+    if (m1) addAddr(m1 + ', ' + prov);
+    addName(prov);
+    addAddr(prov);
   }
 
-  // well-known cities often written WITHOUT "City" and with no province (esp. Metro Manila)
-  const PH_CITIES = ['Makati','Mandaluyong','Marikina','Muntinlupa','Pasig','Pasay','Taguig','Caloocan','Valenzuela','Manila','Bacoor','Dasmarinas','Antipolo','Cainta','Taytay','Binan','Calamba','Santa Rosa','Cabuyao','Bacolod','Iloilo','Davao','Cagayan de Oro','Zamboanga','General Santos','Baguio','Angeles'];
-  for (const c of PH_CITIES) {
-    if (new RegExp('\\b' + c.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '\\b', 'i').test(a)) { push(c); break; }
-  }
+  for (const c of PH_CITIES) { if (new RegExp('\\b' + escRe(c) + '\\b', 'i').test(a)) { addName(c); break; } }
 
-  const parts = a.split(',').map(s => s.trim()).filter(Boolean);
-  if (parts.length) push(parts[parts.length - 1]);
-  push(a);
-  return [...new Set(out)].filter(Boolean);
+  addAddr(a);
+  return { names, addrs };
 }
 
-// Open-Meteo geocoder: reliable from servers, no key, no rate-limit headaches.
+// Open-Meteo geocoder: reliable from servers, no key. Expects a plain place NAME.
 async function geocodeOpenMeteo(name) {
   const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=5&language=en&format=json`;
   const res = await fetch(url);
@@ -124,9 +132,10 @@ async function geocodeOpenMeteo(name) {
   return r ? { lat: r.latitude, lon: r.longitude } : null;
 }
 
-// Nominatim fallback for full free-form addresses.
-async function geocodeNominatim(addr) {
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addr)}&format=json&limit=1&countrycodes=ph`;
+// Nominatim fallback: handles "town, province" and full free-form addresses.
+async function geocodeNominatim(q) {
+  const query = /philippines/i.test(q) ? q : q + ', Philippines';
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&countrycodes=ph`;
   const res = await fetch(url, { headers: { 'User-Agent': 'HonorGlobalCRM/1.0 (workforce ops; contact ops@staffhero.co)' } });
   if (!res.ok) return null;
   const hits = await res.json();
@@ -134,7 +143,6 @@ async function geocodeNominatim(addr) {
 }
 
 async function geocodeMissing() {
-  // only geocode active people whose location text is set and whose coords are missing or stale
   const { rows } = await pool.query(`
     SELECT clickup_id, name, location
     FROM hires
@@ -144,29 +152,25 @@ async function geocodeMissing() {
   `);
   let okCount = 0, missCount = 0;
   for (const r of rows) {
+    const { names, addrs } = placeCandidates(r.location);
     let hit = null;
-    try {
-      for (const cand of placeCandidates(r.location)) {
-        hit = await geocodeOpenMeteo(cand);
+    for (const n of names) {
+      try { hit = await geocodeOpenMeteo(n); } catch (e) { console.error('[weather] open-meteo err', e.message); }
+      if (hit) break;
+    }
+    if (!hit) {
+      for (const q of addrs) {
+        try { hit = await geocodeNominatim(q); } catch (e) { console.error('[weather] nominatim err', e.message); }
+        await sleep(GEOCODE_DELAY_MS);
         if (hit) break;
       }
-    } catch (e) { console.error('[weather] open-meteo geocode error for', r.name, e.message); }
-
-    if (!hit) {
-      try { hit = await geocodeNominatim(r.location); }
-      catch (e) { console.error('[weather] nominatim error for', r.name, e.message); }
-      await sleep(GEOCODE_DELAY_MS); // only throttle the Nominatim fallback
     }
-
     if (hit) {
-      await pool.query(
-        `UPDATE hires SET latitude=$1, longitude=$2, geocoded_location=$3 WHERE clickup_id=$4`,
-        [hit.lat, hit.lon, r.location, r.clickup_id]
-      );
+      await pool.query(`UPDATE hires SET latitude=$1, longitude=$2, geocoded_location=$3 WHERE clickup_id=$4`, [hit.lat, hit.lon, r.location, r.clickup_id]);
       okCount++;
     } else {
       missCount++;
-      console.log(`[weather] geocode MISS: ${r.name} -> "${r.location}"`);
+      console.log(`[weather] geocode MISS: ${r.name} | names=[${names.join(' | ')}] addrs=[${addrs.join(' | ')}]`);
       await logEvent('weather_geocode_miss', `Could not geocode "${r.location}" for ${r.name}`, { location: r.location });
     }
   }
