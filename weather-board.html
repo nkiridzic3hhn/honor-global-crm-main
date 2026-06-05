@@ -22,6 +22,20 @@
   .brand h1{font-size:16px;font-weight:600}
   .brand p{font-size:11px;color:var(--muted);letter-spacing:.4px;text-transform:uppercase}
   .head-right{display:flex;align-items:center;gap:18px}
+  .search{position:relative}
+  .search .si{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:14px;pointer-events:none}
+  .search input{background:var(--panel-2);border:1px solid var(--line);color:var(--txt);font-family:inherit;font-size:13px;padding:8px 12px 8px 31px;border-radius:8px;width:210px;outline:none;transition:width .15s,border-color .15s}
+  .search input::placeholder{color:var(--muted)}
+  .search input:focus{border-color:var(--orange);width:250px}
+  .search-res{position:absolute;top:42px;left:0;right:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden auto;z-index:1000;max-height:330px;display:none;box-shadow:0 12px 32px rgba(0,0,0,.45)}
+  .search-res.show{display:block}
+  .sr{display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--line)}
+  .sr:last-child{border-bottom:none}
+  .sr:hover,.sr.active{background:var(--panel-2)}
+  .sr .srdot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+  .sr .srname{font-size:13px;font-weight:600}
+  .sr .srloc{font-size:11px;color:var(--muted);margin-top:1px}
+  .sr .srno{margin-left:auto;font-size:9px;color:var(--grey);font-family:'IBM Plex Mono',monospace;text-transform:uppercase;letter-spacing:.5px;border:1px solid var(--line);padding:2px 6px;border-radius:20px}
   .clock{text-align:right}.clock .t{font-size:18px;font-weight:600}.clock .d{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
   .refresh{background:var(--panel-2);border:1px solid var(--line);color:var(--txt);padding:8px 14px;border-radius:8px;font-family:inherit;font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:7px;transition:.15s}
   .refresh:hover{border-color:var(--orange);color:var(--orange)}
@@ -111,6 +125,11 @@
     <div><h1>Honor Global · PH Workforce Status Board</h1><p>Proactive disruption monitoring</p></div>
   </div>
   <div class="head-right">
+    <div class="search">
+      <span class="si">&#9906;</span>
+      <input id="q" type="text" placeholder="Search staff…" autocomplete="off">
+      <div class="search-res" id="qres"></div>
+    </div>
     <a href="/" class="refresh" style="text-decoration:none">&#8592;&nbsp;Back to CRM</a>
     <span class="live-pill"><span class="d"></span>LIVE</span>
     <div class="clock"><div class="t num" id="clk">--:--</div><div class="d">MANILA TIME</div></div>
@@ -251,6 +270,58 @@ function setView(v){
 }
 
 document.getElementById('rf').addEventListener('click',function(){this.classList.add('spin');load().then(()=>setTimeout(()=>this.classList.remove('spin'),500));});
+// ---- search & fly-to ----
+const Q=document.getElementById('q'), QRES=document.getElementById('qres');
+let qMatches=[], qActive=-1;
+
+function searchInput(){
+  const term=Q.value.trim().toLowerCase();
+  if(!term){ qMatches=[]; QRES.classList.remove('show'); QRES.innerHTML=''; return; }
+  qMatches=STATE.hires.filter(h=>String(h.name).toLowerCase().includes(term))
+                      .sort((a,b)=>RANK[a.level]-RANK[b.level]).slice(0,8);
+  qActive=-1;
+  QRES.innerHTML = qMatches.length ? qMatches.map((h,i)=>`
+    <div class="sr" data-i="${i}" onmousedown="event.preventDefault()" onclick="pickPerson(${i})">
+      <span class="srdot" style="background:${COL[h.level]}"></span>
+      <div><div class="srname">${esc(h.name)}</div><div class="srloc">${h.location?esc(h.location):'no location set'}</div></div>
+      ${h.latitude==null?'<span class="srno">off-map</span>':''}
+    </div>`).join('')
+    : '<div class="sr" style="cursor:default"><span class="srname" style="color:var(--muted)">No match</span></div>';
+  QRES.classList.add('show');
+}
+
+function pickPerson(i){
+  const h=qMatches[i]; if(!h) return;
+  Q.value=h.name;
+  if(h.latitude!=null && h.longitude!=null){
+    QRES.classList.remove('show');
+    STATE.map.flyTo([h.latitude,h.longitude], 11, {duration:.8});
+    const m=STATE.markers[h.clickup_id];
+    if(m) setTimeout(()=>m.openPopup(), 850);
+  } else {
+    QRES.innerHTML=`<div class="sr" style="cursor:default">
+      <span class="srdot" style="background:var(--grey)"></span>
+      <div><div class="srname" style="color:var(--yellow)">${esc(h.name)}</div>
+      <div class="srloc">Not on the map — address is outside PH or missing in ClickUp.</div></div></div>`;
+    QRES.classList.add('show');
+    STATE.map.flyTo([12.0,122.5], 6, {duration:.6});
+  }
+}
+
+Q.addEventListener('input', searchInput);
+Q.addEventListener('focus', searchInput);
+Q.addEventListener('keydown', e=>{
+  if(!QRES.classList.contains('show')) return;
+  const items=[...QRES.querySelectorAll('.sr[data-i]')];
+  if(e.key==='ArrowDown'){ e.preventDefault(); qActive=Math.min(qActive+1, items.length-1); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); qActive=Math.max(qActive-1, 0); }
+  else if(e.key==='Enter'){ e.preventDefault(); if(qActive<0 && qMatches.length) qActive=0; if(qActive>=0) pickPerson(qActive); return; }
+  else if(e.key==='Escape'){ QRES.classList.remove('show'); Q.blur(); return; }
+  items.forEach((el,idx)=>el.classList.toggle('active', idx===qActive));
+  if(items[qActive]) items[qActive].scrollIntoView({block:'nearest'});
+});
+document.addEventListener('click', e=>{ if(!e.target.closest('.search')) QRES.classList.remove('show'); });
+
 load();
 setInterval(load,120000); // soft auto-refresh every 2 min
 </script>
