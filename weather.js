@@ -28,6 +28,7 @@ const YEL_PRECIP = 2.5;   // mm/h  moderate rain
 const YEL_WIND   = 25;    // km/h
 const RE_PING_HOURS = 3;  // if someone stays RED, don't re-ping more often than this
 const GEOCODE_DELAY_MS = 1100; // Nominatim asks for <= 1 req/sec
+const GEOCODE_VERSION = 3; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
 
 let lastRun = null, lastCount = 0, running = false;
 export function weatherStatus() { return { lastRun, lastCount, running }; }
@@ -49,6 +50,18 @@ export async function ensureWeatherSchema() {
       last_ping_at TIMESTAMPTZ
     );
   `);
+
+  // One-time full re-geocode whenever the geocoding logic version changes.
+  // This clears stale/wrong coordinates so every active hire is recomputed with the latest logic.
+  await pool.query(`CREATE TABLE IF NOT EXISTS weather_meta (key TEXT PRIMARY KEY, value TEXT);`);
+  const { rows } = await pool.query(`SELECT value FROM weather_meta WHERE key='geocode_version'`);
+  const stored = rows.length ? Number(rows[0].value) : 0;
+  if (stored !== GEOCODE_VERSION) {
+    const r = await pool.query(`UPDATE hires SET latitude=NULL, longitude=NULL, geocoded_location=NULL WHERE latitude IS NOT NULL`);
+    await pool.query(`INSERT INTO weather_meta (key,value) VALUES ('geocode_version',$1)
+                      ON CONFLICT (key) DO UPDATE SET value=$1`, [String(GEOCODE_VERSION)]);
+    console.log(`[weather] geocode logic v${GEOCODE_VERSION}: cleared ${r.rowCount} stale coordinate(s); all hires will re-geocode on the next pass`);
+  }
 }
 
 // ---------- scoring ----------

@@ -245,11 +245,30 @@ function render(){
   }
 
   Object.values(STATE.markers).forEach(m=>STATE.map.removeLayer(m));STATE.markers={};
+  // Group everyone who resolved to the same point (same town centre) so we can fan them
+  // out into separate, individually-clickable dots instead of stacking them on one pixel.
+  const groups={};
   STATE.hires.forEach(h=>{
+    h._mlat=null;h._mlon=null;
     if(h.latitude==null||h.longitude==null) return;
-    const icon=L.divIcon({className:'mk-wrap',html:`<div class="mk mk-${h.level}"><span class="mk-core"></span></div>`,iconSize:[20,20],iconAnchor:[10,10]});
-    STATE.markers[h.clickup_id]=L.marker([h.latitude,h.longitude],{icon}).addTo(STATE.map)
-      .bindPopup(`<b>${esc(h.name)}</b><br>${esc(h.location||'')}<br>Rain ${h.precip.toFixed(1)}mm · Wind ${Math.round(h.wind)}km/h`);
+    const k=Number(h.latitude).toFixed(3)+','+Number(h.longitude).toFixed(3);
+    (groups[k]=groups[k]||[]).push(h);
+  });
+  Object.values(groups).forEach(arr=>{
+    arr.forEach((h,i)=>{
+      let lat=Number(h.latitude), lon=Number(h.longitude);
+      if(arr.length>1){
+        const perRing=10, ring=1+Math.floor(i/perRing);
+        const ang=(2*Math.PI*(i%perRing))/Math.min(arr.length,perRing);
+        const R=0.012*ring; // ~1.3 km per ring, so co-located people fan out around their town
+        lat+=R*Math.sin(ang);
+        lon+=R*Math.cos(ang)/Math.cos(lat*Math.PI/180);
+      }
+      h._mlat=lat;h._mlon=lon;
+      const icon=L.divIcon({className:'mk-wrap',html:`<div class="mk mk-${h.level}"><span class="mk-core"></span></div>`,iconSize:[20,20],iconAnchor:[10,10]});
+      STATE.markers[h.clickup_id]=L.marker([lat,lon],{icon}).addTo(STATE.map)
+        .bindPopup(`<b>${esc(h.name)}</b><br>${esc(h.location||'')}<br>Rain ${h.precip.toFixed(1)}mm · Wind ${Math.round(h.wind)}km/h`);
+    });
   });
   document.getElementById('upd').textContent='updated '+new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
 }
@@ -294,7 +313,8 @@ function searchInput(){
 function focusHire(id){
   const h=STATE.hires.find(x=>String(x.clickup_id)===String(id));
   if(!h || h.latitude==null || h.longitude==null) return;
-  STATE.map.flyTo([h.latitude,h.longitude], 11, {duration:.8});
+  const lat=h._mlat!=null?h._mlat:Number(h.latitude), lon=h._mlon!=null?h._mlon:Number(h.longitude);
+  STATE.map.flyTo([lat,lon], 11, {duration:.8});
   const m=STATE.markers[h.clickup_id];
   if(m) setTimeout(()=>m.openPopup(), 850);
 }
@@ -304,7 +324,7 @@ function pickPerson(i){
   Q.value=h.name;
   if(h.latitude!=null && h.longitude!=null){
     QRES.classList.remove('show');
-    STATE.map.flyTo([h.latitude,h.longitude], 11, {duration:.8});
+    STATE.map.flyTo([h._mlat!=null?h._mlat:Number(h.latitude), h._mlon!=null?h._mlon:Number(h.longitude)], 11, {duration:.8});
     const m=STATE.markers[h.clickup_id];
     if(m) setTimeout(()=>m.openPopup(), 850);
   } else {
