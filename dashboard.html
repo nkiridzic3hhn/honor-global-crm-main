@@ -73,7 +73,7 @@ const api=(p,o)=>fetch('/api'+p,o).then(r=>r.json());
 const BUCKETS={pending:'Pending',avoided_cost:'Avoided Cost',domestic_replacement:'Domestic Replacement',third_party_replacement:'3rd Party Replacement',cost:'Cost'};
 
 let roster=[],payroll=[],settings={hours_per_week:40,days_per_week:5,weeks_per_year:52};
-let tab='overview',filter='all',openRow=null,fAgency='all',fSup='all',fMissing=false,openWeek=null;
+let tab='overview',filter='all',openRow=null,fAgency='all',fSup='all',fMissing=false,openWeek=null,selectedWeeks=new Set();
 
 async function boot(){ await refresh(); render(); }
 async function refresh(){
@@ -275,7 +275,13 @@ function pay(){
       </div>
     </div>
     <div id="multiResult"></div>
-    <div style="display:flex;justify-content:space-between;align-items:center"><div class="sec">Posted Weeks (newest first)</div><button class="btn sm" id="fixDates" style="margin-top:18px">Fix week order</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:28px">
+      <div class="sec" style="margin:0">Posted Weeks (newest first)</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        ${selectedWeeks.size?`<button class="btn sm" id="delSelected" style="color:#ff9bac;border-color:#3a141d">Delete selected (${selectedWeeks.size})</button>`:''}
+        <button class="btn sm" id="fixDates">Fix week order</button>
+      </div>
+    </div>
     ${weeks.length?weeks.map((w,idx)=>weekCard(w,idx)).join(''):'<div class="empty">No payroll posted yet.</div>'}`;
   $('#up').onclick=async()=>{
     const f=$('#file').files[0]; if(!f){toast('Pick a file first');return;}
@@ -300,7 +306,14 @@ function pay(){
     } else toast('Error: '+(r.error||'failed'));
   };
   document.querySelectorAll('[data-pweek]').forEach(h=>h.onclick=()=>{const k=h.dataset.pweek;openWeek=openWeek===k?null:k;render();});
-  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();if(!confirm('Delete this payroll week?'))return;await api('/payroll/'+encodeURIComponent(b.dataset.del),{method:'DELETE'});await refresh();render();});
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();if(!confirm('Delete this payroll week?'))return;await api('/payroll/'+encodeURIComponent(b.dataset.del),{method:'DELETE'});selectedWeeks.delete(b.dataset.del);await refresh();render();});
+  document.querySelectorAll('.wkChk').forEach(c=>c.onchange=()=>{const k=c.dataset.wk;if(c.checked)selectedWeeks.add(k);else selectedWeeks.delete(k);render();});
+  const ds=$('#delSelected'); if(ds) ds.onclick=async()=>{
+    if(!confirm(`Delete ${selectedWeeks.size} selected week(s)? This cannot be undone.`))return;
+    ds.textContent='Deleting…';
+    for(const p of [...selectedWeeks]){ await api('/payroll/'+encodeURIComponent(p),{method:'DELETE'}); }
+    selectedWeeks.clear(); await refresh(); render(); toast('Deleted selected weeks');
+  };
   const fd2=$('#fixDates'); if(fd2) fd2.onclick=async()=>{fd2.textContent='Fixing…';const r=await api('/payroll/fix-dates',{method:'POST'});await refresh();render();toast('Reordered '+(r.fixed||0)+' weeks');};
 }
 function weekCard(w,idx){
@@ -308,9 +321,12 @@ function weekCard(w,idx){
   const ats=(w.agency_totals||[]);
   return `<div class="card" style="margin-bottom:10px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-      <div data-pweek="${escAttr(w.period)}" style="display:flex;align-items:center;gap:10px;cursor:pointer;flex:1">
-        <span style="color:var(--mut)">${open?'▲':'▼'}</span>
-        <span><b>${w.period||w.week_ending||'—'}</b> <span style="font-size:11px;color:var(--mut2)">${(w.items||[]).length} people</span></span>
+      <div style="display:flex;align-items:center;gap:10px;flex:1">
+        <input type="checkbox" class="wkChk" data-wk="${escAttr(w.period)}" ${selectedWeeks.has(w.period)?'checked':''} onclick="event.stopPropagation()" style="width:16px;height:16px;cursor:pointer;flex-shrink:0">
+        <div data-pweek="${escAttr(w.period)}" style="display:flex;align-items:center;gap:10px;cursor:pointer;flex:1">
+          <span style="color:var(--mut)">${open?'▲':'▼'}</span>
+          <span><b>${w.period||w.week_ending||'—'}</b> <span style="font-size:11px;color:var(--mut2)">${(w.items||[]).length} people</span></span>
+        </div>
       </div>
       <div style="display:flex;align-items:center;gap:14px">
         <b>${F2(w.total)}</b>
