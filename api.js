@@ -187,16 +187,25 @@ router.post('/payroll/upload-multi', upload.single('file'), async (req, res) => 
       }
       if (!items.length) { results.push({ sheet: sheetName, skipped: 'no people rows' }); continue; }
 
-      // derive week_ending
+      // derive week_ending — always from the END of the range, with the correct year.
       let weekEnding = null;
-      const m = period.match(/([A-Za-z]{3,9})\s*(\d{1,2})\s*[–-]\s*(?:([A-Za-z]{3,9})\s*)?(\d{1,2}),?\s*(\d{4})?/);
+      const MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
       const dm = period.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
-      if (dm) { const y=dm[3].length===2?'20'+dm[3]:dm[3]; weekEnding=`${y}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`; }
-      else if (m) {
-        const MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
-        const endMon = (m[3]||m[1]).slice(0,3).toLowerCase();
-        const mo = MON[endMon]; const day = m[4]; let yr = m[5];
-        if (!yr) { yr = (mo>=9 ? 2025 : 2026); } // Oct–Dec = 2025, Jan+ = 2026 for this dataset
+      if (dm) {
+        const y=dm[3].length===2?'20'+dm[3]:dm[3];
+        weekEnding=`${y}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`;
+      } else {
+        // Split on the dash; take the part AFTER it as the end of the range.
+        const parts = period.split(/[–-]/);
+        const endPart = (parts[parts.length-1] || '').trim();   // e.g. "Jan 2, 2026"
+        const startPart = (parts[0] || '').trim();              // e.g. "Dec 29, 2025"
+        // end month: from endPart if it names one, else reuse start month
+        const endMonName = (endPart.match(/[A-Za-z]{3,9}/) || startPart.match(/[A-Za-z]{3,9}/) || [''])[0].slice(0,3).toLowerCase();
+        const mo = MON[endMonName];
+        const day = parseInt((endPart.match(/\d{1,2}/) || ['1'])[0], 10);
+        // end year: prefer a 4-digit year in endPart, else in startPart, else infer
+        let yr = (endPart.match(/(20\d{2})/) || startPart.match(/(20\d{2})/) || [])[1];
+        if (!yr) yr = (mo >= 9 ? 2025 : 2026); // dataset: Oct–Dec 2025, Jan+ 2026
         if (mo) weekEnding = `${yr}-${String(mo).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
       }
 
