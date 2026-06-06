@@ -28,7 +28,7 @@ const YEL_PRECIP = 2.5;   // mm/h  moderate rain
 const YEL_WIND   = 25;    // km/h
 const RE_PING_HOURS = 3;  // if someone stays RED, don't re-ping more often than this
 const GEOCODE_DELAY_MS = 1100; // Nominatim asks for <= 1 req/sec
-const GEOCODE_VERSION = 7; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
+const GEOCODE_VERSION = (process.env.GEOCODER_API_KEY ? 100 : 0) + 8; // street-level when a geocoder key is set, town-level otherwise; either change forces a re-geocode
 
 let lastRun = null, lastCount = 0, running = false;
 export function weatherStatus() { return { lastRun, lastCount, running }; }
@@ -171,6 +171,23 @@ async function geocodeNominatim(q) {
   return good ? { lat: Number(good.lat), lon: Number(good.lon) } : null;
 }
 
+// LocationIQ: full street-address geocoder (needs a free API key in GEOCODER_API_KEY).
+// This is what places each person at their actual street, not just the city centre.
+const GEOCODER_KEY = process.env.GEOCODER_API_KEY || '';
+const LIQ_DELAY_MS = 700; // free tier allows ~2 req/sec; stay well under
+async function geocodeLocationIQ(addr) {
+  if (!GEOCODER_KEY) return null;
+  const q = /philippines/i.test(addr) ? addr : addr + ', Philippines';
+  const url = `https://us1.locationiq.com/v1/search?key=${GEOCODER_KEY}&q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=ph&normalizecity=1`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'HonorGlobalCRM/1.0 (ops@staffhero.co)' } });
+  if (!res.ok) return null;
+  const hits = await res.json();
+  if (!Array.isArray(hits) || !hits.length) return null;
+  const h = hits[0];
+  if (h.class === 'water' || h.type === 'country' || h.addresstype === 'country') return null;
+  return { lat: Number(h.lat), lon: Number(h.lon) };
+}
+
 // Addresses clearly outside the Philippines must never be force-placed on a PH map.
 const FOREIGN_COUNTRIES = new Set(['armenia','peru','colombia','argentina','mexico','brazil','brasil','chile','venezuela','ecuador','bolivia','paraguay','uruguay','guatemala','honduras','nicaragua','el salvador','costa rica','panama','dominican republic','cuba','jamaica','egypt','morocco','nigeria','ghana','kenya','uganda','tanzania','south africa','india','pakistan','bangladesh','nepal','sri lanka','indonesia','malaysia','thailand','vietnam','cambodia','china','japan','south korea','korea','taiwan','united states','usa','u.s.a','u.s','canada','united kingdom','uk','ireland','australia','new zealand','spain','portugal','france','germany','netherlands','belgium','italy','greece','turkey','russia','ukraine','poland','romania','georgia','azerbaijan','kazakhstan','iran','iraq','israel','palestine','lebanon','syria','jordan','saudi arabia','united arab emirates','uae','qatar','kuwait','bahrain','oman','yemen','afghanistan']);
 function isForeign(addr) {
@@ -234,13 +251,20 @@ async function geocodeMissing() {
     }
     const { names } = placeCandidates(r.location);
     let hit = null;
-    // 1) Fast, reliable town/city placement via Open-Meteo (no rate limit) — places the bulk instantly.
-    for (const n of names) {
-      try { hit = await geocodeOpenMeteo(n); } catch (e) { console.error('[weather] open-meteo err', e.message); }
-      if (hit) break;
+    // 1) If a geocoder key is set, place at the real street address first.
+    if (GEOCODER_KEY) {
+      try { hit = await geocodeLocationIQ(r.location); } catch (e) { console.error('[weather] locationiq err', e.message); }
+      await sleep(LIQ_DELAY_MS);
     }
-    // 2) Only the few that miss fall through to the rate-limited finer lookup.
+    // 2) Town/city placement via Open-Meteo (fast, no key) — primary when no key, fallback otherwise.
     if (!hit) {
+      for (const n of names) {
+        try { hit = await geocodeOpenMeteo(n); } catch (e) { console.error('[weather] open-meteo err', e.message); }
+        if (hit) break;
+      }
+    }
+    // 3) Free finer lookup only when there's no paid key and the above missed.
+    if (!hit && !GEOCODER_KEY) {
       for (const q of barangayQueries(r.location)) {
         try { hit = await geocodeNominatim(q); } catch (e) { console.error('[weather] nominatim err', e.message); }
         await sleep(GEOCODE_DELAY_MS);
