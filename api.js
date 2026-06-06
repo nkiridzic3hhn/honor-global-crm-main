@@ -61,6 +61,23 @@ function pickCol(headers, candidates){
   return -1;
 }
 const num = v => { const n=parseFloat(String(v??'').replace(/[^0-9.\-]/g,'')); return isNaN(n)?null:n; };
+
+// Derive a sortable YYYY-MM-DD from a period label, always using the END of the range.
+function deriveWeekEnding(period){
+  const MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  const p = String(period||'');
+  const dm = p.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (dm) { const y=dm[3].length===2?'20'+dm[3]:dm[3]; return `${y}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`; }
+  const parts = p.split(/[–-]/);
+  const endPart = (parts[parts.length-1] || '').trim();
+  const startPart = (parts[0] || '').trim();
+  const endMonName = (endPart.match(/[A-Za-z]{3,9}/) || startPart.match(/[A-Za-z]{3,9}/) || [''])[0].slice(0,3).toLowerCase();
+  const mo = MON[endMonName];
+  const day = parseInt((endPart.match(/\d{1,2}/) || ['1'])[0], 10);
+  let yr = (endPart.match(/(20\d{2})/) || startPart.match(/(20\d{2})/) || [])[1];
+  if (!yr) yr = (mo >= 9 ? 2025 : 2026);
+  return mo ? `${yr}-${String(mo).padStart(2,'0')}-${String(day).padStart(2,'0')}` : null;
+}
 // normalize agency for grouping: collapse case + spacing differences
 const normAgency = a => String(a||'').trim().replace(/\s+/g,' ')
   .toLowerCase().replace(/\b\w/g, c=>c.toUpperCase());
@@ -188,26 +205,7 @@ router.post('/payroll/upload-multi', upload.single('file'), async (req, res) => 
       if (!items.length) { results.push({ sheet: sheetName, skipped: 'no people rows' }); continue; }
 
       // derive week_ending — always from the END of the range, with the correct year.
-      let weekEnding = null;
-      const MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
-      const dm = period.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
-      if (dm) {
-        const y=dm[3].length===2?'20'+dm[3]:dm[3];
-        weekEnding=`${y}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`;
-      } else {
-        // Split on the dash; take the part AFTER it as the end of the range.
-        const parts = period.split(/[–-]/);
-        const endPart = (parts[parts.length-1] || '').trim();   // e.g. "Jan 2, 2026"
-        const startPart = (parts[0] || '').trim();              // e.g. "Dec 29, 2025"
-        // end month: from endPart if it names one, else reuse start month
-        const endMonName = (endPart.match(/[A-Za-z]{3,9}/) || startPart.match(/[A-Za-z]{3,9}/) || [''])[0].slice(0,3).toLowerCase();
-        const mo = MON[endMonName];
-        const day = parseInt((endPart.match(/\d{1,2}/) || ['1'])[0], 10);
-        // end year: prefer a 4-digit year in endPart, else in startPart, else infer
-        let yr = (endPart.match(/(20\d{2})/) || startPart.match(/(20\d{2})/) || [])[1];
-        if (!yr) yr = (mo >= 9 ? 2025 : 2026); // dataset: Oct–Dec 2025, Jan+ 2026
-        if (mo) weekEnding = `${yr}-${String(mo).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-      }
+      let weekEnding = deriveWeekEnding(period);
 
       const total = items.reduce((s,x)=>s+x.amount,0);
       const agencyTotals = Object.entries(agencyMap).map(([agency,amt])=>({agency, amount:+amt.toFixed(2)})).sort((a,b)=>b.amount-a.amount);
@@ -345,6 +343,20 @@ router.get('/impact', async (req, res) => {
     const offshore = await q(`SELECT period, week_ending, total, agency_totals FROM payroll_weeks ORDER BY week_ending ASC NULLS LAST, period ASC`);
     const domestic = await q(`SELECT period, agency, week_ending, total, headcount FROM domestic_payroll ORDER BY week_ending ASC NULLS LAST, period ASC`);
     res.json({ offshore, domestic });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- Repair: recompute week_ending for all stored payroll weeks (fixes sort order) ----
+router.post('/payroll/fix-dates', async (req, res) => {
+  try {
+    const rows = await q(`SELECT period FROM payroll_weeks`);
+    let fixed = 0;
+    for (const r of rows) {
+      const we = deriveWeekEnding(r.period);
+      if (we) { await q(`UPDATE payroll_weeks SET week_ending=$1 WHERE period=$2`, [we, r.period]); fixed++; }
+    }
+    await logEvent('maintenance', `Recomputed week_ending for ${fixed} payroll weeks`, null);
+    res.json({ ok: true, fixed });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
