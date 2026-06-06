@@ -28,7 +28,7 @@ const YEL_PRECIP = 2.5;   // mm/h  moderate rain
 const YEL_WIND   = 25;    // km/h
 const RE_PING_HOURS = 3;  // if someone stays RED, don't re-ping more often than this
 const GEOCODE_DELAY_MS = 1100; // Nominatim asks for <= 1 req/sec
-const GEOCODE_VERSION = (process.env.GEOCODER_API_KEY ? 100 : 0) + 8; // street-level when a geocoder key is set, town-level otherwise; either change forces a re-geocode
+const GEOCODE_VERSION = (process.env.GEOCODER_API_KEY ? 100 : 0) + 9; // street-level when a geocoder key is set, town-level otherwise; either change forces a re-geocode
 
 let lastRun = null, lastCount = 0, running = false;
 export function weatherStatus() { return { lastRun, lastCount, running }; }
@@ -188,6 +188,27 @@ async function geocodeLocationIQ(addr) {
   return { lat: Number(h.lat), lon: Number(h.lon) };
 }
 
+// Photon (komoot): free, keyless, OpenStreetMap-based street-level geocoder.
+// Reads the full address and returns a precise point. Locked to a Philippines bounding box.
+const PHOTON_DELAY_MS = 300;
+async function geocodePhoton(addr) {
+  const q = String(addr).replace(/\s+/g, ' ').trim();
+  if (!q) return null;
+  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=en&bbox=116.9,4.6,126.6,21.2`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'HonorGlobalCRM/1.0 (ops@staffhero.co)' } });
+  if (!res.ok) return null;
+  const d = await res.json();
+  const f = (d.features || [])[0];
+  if (!f || !f.geometry || !Array.isArray(f.geometry.coordinates)) return null;
+  const p = f.properties || {};
+  // Reject coarse / non-land results.
+  if (/^(country|state|sea|ocean|water)$/i.test(p.type || '')) return null;
+  if (p.countrycode && String(p.countrycode).toUpperCase() !== 'PH') return null;
+  const [lon, lat] = f.geometry.coordinates;
+  if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+  return { lat, lon };
+}
+
 // Addresses clearly outside the Philippines must never be force-placed on a PH map.
 const FOREIGN_COUNTRIES = new Set(['armenia','peru','colombia','argentina','mexico','brazil','brasil','chile','venezuela','ecuador','bolivia','paraguay','uruguay','guatemala','honduras','nicaragua','el salvador','costa rica','panama','dominican republic','cuba','jamaica','egypt','morocco','nigeria','ghana','kenya','uganda','tanzania','south africa','india','pakistan','bangladesh','nepal','sri lanka','indonesia','malaysia','thailand','vietnam','cambodia','china','japan','south korea','korea','taiwan','united states','usa','u.s.a','u.s','canada','united kingdom','uk','ireland','australia','new zealand','spain','portugal','france','germany','netherlands','belgium','italy','greece','turkey','russia','ukraine','poland','romania','georgia','azerbaijan','kazakhstan','iran','iraq','israel','palestine','lebanon','syria','jordan','saudi arabia','united arab emirates','uae','qatar','kuwait','bahrain','oman','yemen','afghanistan']);
 function isForeign(addr) {
@@ -251,23 +272,20 @@ async function geocodeMissing() {
     }
     const { names } = placeCandidates(r.location);
     let hit = null;
-    // 1) If a geocoder key is set, place at the real street address first.
+    // 1) Best: paid key (LocationIQ) -> exact street address.
     if (GEOCODER_KEY) {
       try { hit = await geocodeLocationIQ(r.location); } catch (e) { console.error('[weather] locationiq err', e.message); }
       await sleep(LIQ_DELAY_MS);
     }
-    // 2) Town/city placement via Open-Meteo (fast, no key) — primary when no key, fallback otherwise.
+    // 2) Free street-level lookup via Photon, constrained to the Philippines.
+    if (!hit) {
+      try { hit = await geocodePhoton(r.location); } catch (e) { console.error('[weather] photon err', e.message); }
+      await sleep(PHOTON_DELAY_MS);
+    }
+    // 3) Last resort: town/city centre via Open-Meteo.
     if (!hit) {
       for (const n of names) {
         try { hit = await geocodeOpenMeteo(n); } catch (e) { console.error('[weather] open-meteo err', e.message); }
-        if (hit) break;
-      }
-    }
-    // 3) Free finer lookup only when there's no paid key and the above missed.
-    if (!hit && !GEOCODER_KEY) {
-      for (const q of barangayQueries(r.location)) {
-        try { hit = await geocodeNominatim(q); } catch (e) { console.error('[weather] nominatim err', e.message); }
-        await sleep(GEOCODE_DELAY_MS);
         if (hit) break;
       }
     }
