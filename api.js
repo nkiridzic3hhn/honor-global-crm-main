@@ -137,6 +137,86 @@ router.delete('/payroll/:period', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- Multi-sheet payroll upload: one workbook, each tab = one week ----
+const SKIP_SHEET = /summary|overview|index|notes?$/i;
+router.post('/payroll/upload-multi', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'no file' });
+    const wb = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const results = [];
+    for (const sheetName of wb.SheetNames) {
+      if (SKIP_SHEET.test(sheetName.trim())) { results.push({ sheet: sheetName, skipped: 'summary/non-week tab' }); continue; }
+      const sheet = wb.Sheets[sheetName];
+      const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' });
+      if (!rows.length) { results.push({ sheet: sheetName, skipped: 'empty' }); continue; }
+
+      // find the header row (the one containing an employee-name column)
+      let hIdx = rows.findIndex(r => r.some(c => /employee name|name of employee|employee/i.test(String(c))));
+      if (hIdx < 0) hIdx = rows.findIndex(r => r.some(c => /market|company|agency/i.test(String(c))));
+      if (hIdx < 0) { results.push({ sheet: sheetName, skipped: 'no header row' }); continue; }
+      const headers = rows[hIdx];
+      const iAg = pickCol(headers, COL_AGENCY);
+      const iN  = pickCol(headers, COL_NAME);
+      const iR  = pickCol(headers, COL_RATE);
+      const iH  = pickCol(headers, COL_HOURS);
+      const iA  = pickCol(headers, COL_AMOUNT);
+      const iNo = pickCol(headers, COL_NOTES);
+
+      // period: prefer the title row (row 0) if it has a date, else the tab name
+      let period = sheetName.trim();
+      const titleCell = String(rows[0]?.[0] || '');
+      const titleDate = titleCell.split('|').pop().trim();
+      if (/\d/.test(titleDate)) period = titleDate;
+
+      const items = []; const agencyMap = {};
+      for (const r of rows.slice(hIdx + 1)) {
+        const name = String(r[iN<0?1:iN] ?? '').trim();
+        if (!name) continue;
+        if (/^subtotal|^total\b|grand total/i.test(name)) continue; // skip subtotal/total rows
+        const amount = num(r[iA<0?4:iA]);
+        const agency = iAg>=0 ? normAgency(r[iAg]) : '(no agency)';
+        items.push({
+          agency: agency || null, name,
+          rate: iR>=0 ? num(r[iR]) : null,
+          hours: iH>=0 ? num(r[iH]) : null,
+          amount: amount || 0,
+          notes: iNo>=0 ? String(r[iNo] ?? '').trim() : '',
+        });
+        const ak = agency || '(no agency)';
+        agencyMap[ak] = (agencyMap[ak] || 0) + (amount || 0);
+      }
+      if (!items.length) { results.push({ sheet: sheetName, skipped: 'no people rows' }); continue; }
+
+      // derive week_ending
+      let weekEnding = null;
+      const m = period.match(/([A-Za-z]{3,9})\s*(\d{1,2})\s*[–-]\s*(?:([A-Za-z]{3,9})\s*)?(\d{1,2}),?\s*(\d{4})?/);
+      const dm = period.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+      if (dm) { const y=dm[3].length===2?'20'+dm[3]:dm[3]; weekEnding=`${y}-${dm[1].padStart(2,'0')}-${dm[2].padStart(2,'0')}`; }
+      else if (m) {
+        const MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+        const endMon = (m[3]||m[1]).slice(0,3).toLowerCase();
+        const mo = MON[endMon]; const day = m[4]; let yr = m[5];
+        if (!yr) { yr = (mo>=9 ? 2025 : 2026); } // Oct–Dec = 2025, Jan+ = 2026 for this dataset
+        if (mo) weekEnding = `${yr}-${String(mo).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      }
+
+      const total = items.reduce((s,x)=>s+x.amount,0);
+      const agencyTotals = Object.entries(agencyMap).map(([agency,amt])=>({agency, amount:+amt.toFixed(2)})).sort((a,b)=>b.amount-a.amount);
+
+      await q(
+        `INSERT INTO payroll_weeks (period,week_ending,total,items,agency_totals,notes)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (period) DO UPDATE SET week_ending=$2, total=$3, items=$4, agency_totals=$5, notes=$6, posted_at=now()`,
+        [period, weekEnding, total, JSON.stringify(items), JSON.stringify(agencyTotals), null]
+      );
+      results.push({ sheet: sheetName, period, week_ending: weekEnding, people: items.length, total: +total.toFixed(2) });
+    }
+    const loaded = results.filter(r => r.people);
+    await logEvent('payroll_upload', `Multi-week payroll uploaded: ${loaded.length} weeks`, { weeks: loaded.map(r=>r.period) });
+    res.json({ ok: true, loaded: loaded.length, total_weeks: results.length, results });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.get('/settings', async (req, res) => {
   try { const [s] = await q(`SELECT * FROM settings WHERE id=1`); res.json(s); }
   catch (e) { res.status(500).json({ error: e.message }); }

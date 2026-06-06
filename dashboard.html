@@ -107,7 +107,7 @@ function render(){
       <div><div class="ttl">Honor Global · Workforce Cost & Savings</div><div class="sub">Live from ClickUp</div></div>
       <div class="spacer"></div><div class="sync" id="syncTxt"></div>
       <button class="btn" id="syncBtn">⟳ Sync now</button></div>
-    <div class="tabs">${['overview|Overview','buckets|Buckets & Savings','payroll|Payroll','impact|Impact','logs|Logs','settings|Settings'].map(x=>{const[k,l]=x.split('|');return `<div class="tab ${tab===k?'on':''}" data-tab="${k}">${l}</div>`}).join('')}<a class="tab" href="/weather" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px">&#127782;&nbsp;Weather</a></div>
+    <div class="tabs">${['overview|Overview','buckets|Buckets & Savings','payroll|Payroll','impact|Impact','logs|Logs','settings|Settings'].map(x=>{const[k,l]=x.split('|');return `<div class="tab ${tab===k?'on':''}" data-tab="${k}">${l}</div>`}).join('')}</div>
     <div class="body" id="body"></div>`;
   $('#syncBtn').onclick=async()=>{$('#syncBtn').textContent='⟳ Syncing…';await api('/sync',{method:'POST'});await refresh();render();toast('Synced from ClickUp');};
   document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{tab=t.dataset.tab;openRow=null;render();});
@@ -259,13 +259,22 @@ function pay(){
       <div class="card"><div class="lab">vs Prior Week</div><div class="big ${d>0?'up':'dn'}">${d!=null?(d>0?'+':'')+F2(d):'—'}</div><div class="meta">${pct!=null?(d>0?'▲ ':'▼ ')+Math.abs(pct)+'%':(prev?'':'need 2 weeks')}</div></div>
       <div class="card"><div class="lab">Weeks Stored</div><div class="big">${payroll.length}</div><div class="meta">${last&&last.items?last.items.length+' people latest':''}</div></div>
     </div>
-    <div class="note" style="margin-top:14px">Upload finance's weekly file. The <b>pay period is read straight from the file</b> (the "Period" column), so just pick the file and upload — re-uploading the same week overwrites it. Captures agency, rate, hours, pay & notes per person.</div>
-    <div class="card" style="margin-top:14px">
-      <label style="display:block;font-size:11px;color:var(--mut);margin-bottom:4px;font-weight:600">Payroll file (.xlsx / .csv)</label>
-      <input type="file" id="file" accept=".xlsx,.xls,.csv" style="margin-bottom:10px">
-      <button class="btn pri sm" id="up">Upload payroll</button>
-      <span id="upStatus" style="margin-left:10px;font-size:12px;color:var(--mut)"></span>
+    <div class="note" style="margin-top:14px">Two ways to upload: a <b>single week</b>, or a <b>full workbook</b> where each tab is a week. Re-uploading a week overwrites it.</div>
+    <div class="grid" style="grid-template-columns:1fr 1fr;margin-top:14px">
+      <div class="card">
+        <div class="lab" style="margin-bottom:8px">Single week</div>
+        <input type="file" id="file" accept=".xlsx,.xls,.csv" style="margin-bottom:10px">
+        <button class="btn pri sm" id="up">Upload week</button>
+        <span id="upStatus" style="margin-left:8px;font-size:12px;color:var(--mut)"></span>
+      </div>
+      <div class="card">
+        <div class="lab" style="margin-bottom:8px">Full workbook — every tab = a week</div>
+        <input type="file" id="fileMulti" accept=".xlsx,.xls" style="margin-bottom:10px">
+        <button class="btn pri sm" id="upMulti">Upload all weeks</button>
+        <span id="upMultiStatus" style="margin-left:8px;font-size:12px;color:var(--mut)"></span>
+      </div>
     </div>
+    <div id="multiResult"></div>
     <div class="sec">Posted Weeks (newest first)</div>
     ${weeks.length?weeks.map((w,idx)=>weekCard(w,idx)).join(''):'<div class="empty">No payroll posted yet.</div>'}`;
   $('#up').onclick=async()=>{
@@ -276,6 +285,19 @@ function pay(){
     $('#upStatus').textContent='';
     if(r.ok){await refresh();render();toast(`Posted ${r.period} · ${r.count} people · ${F2(r.total)}`);}
     else toast('Error: '+(r.error||'failed'));
+  };
+  $('#upMulti').onclick=async()=>{
+    const f=$('#fileMulti').files[0]; if(!f){toast('Pick a workbook first');return;}
+    $('#upMultiStatus').textContent='Processing all tabs…';
+    const fd=new FormData();fd.append('file',f);
+    const r=await fetch('/api/payroll/upload-multi',{method:'POST',body:fd}).then(x=>x.json()).catch(e=>({error:String(e)}));
+    $('#upMultiStatus').textContent='';
+    if(r.ok){
+      const skipped=(r.results||[]).filter(x=>x.skipped);
+      $('#multiResult').innerHTML=`<div class="card" style="margin-top:12px"><b>Loaded ${r.loaded} weeks.</b>`+
+        (skipped.length?`<div class="meta" style="margin-top:6px">Skipped: ${skipped.map(s=>s.sheet+' ('+s.skipped+')').join(', ')}</div>`:'')+`</div>`;
+      await refresh();render();toast(`Loaded ${r.loaded} weeks`);
+    } else toast('Error: '+(r.error||'failed'));
   };
   document.querySelectorAll('[data-pweek]').forEach(h=>h.onclick=()=>{const k=h.dataset.pweek;openWeek=openWeek===k?null:k;render();});
   document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();if(!confirm('Delete this payroll week?'))return;await api('/payroll/'+encodeURIComponent(b.dataset.del),{method:'DELETE'});await refresh();render();});
