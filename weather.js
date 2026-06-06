@@ -28,7 +28,7 @@ const YEL_PRECIP = 2.5;   // mm/h  moderate rain
 const YEL_WIND   = 25;    // km/h
 const RE_PING_HOURS = 3;  // if someone stays RED, don't re-ping more often than this
 const GEOCODE_DELAY_MS = 1100; // Nominatim asks for <= 1 req/sec
-const GEOCODE_VERSION = 4; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
+const GEOCODE_VERSION = 5; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
 
 let lastRun = null, lastCount = 0, running = false;
 export function weatherStatus() { return { lastRun, lastCount, running }; }
@@ -148,18 +148,24 @@ async function geocodeOpenMeteo(name) {
   const res = await fetch(url);
   if (!res.ok) return null;
   const d = await res.json();
-  const r = (d.results || []).find(x => x.country_code === 'PH') || null;
+  const ph = (d.results || []).filter(x => x.country_code === 'PH');
+  // Prefer populated places (P*) or admin areas (A*); never accept water features (GeoNames H*).
+  const r = ph.find(x => /^[PA]/.test(x.feature_code || '')) || ph.find(x => !/^H/.test(x.feature_code || '')) || null;
   return r ? { lat: r.latitude, lon: r.longitude } : null;
 }
 
 // Nominatim fallback: handles "town, province" and full free-form addresses.
 async function geocodeNominatim(q) {
   const query = /philippines/i.test(q) ? q : q + ', Philippines';
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&countrycodes=ph`;
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&countrycodes=ph`;
   const res = await fetch(url, { headers: { 'User-Agent': 'HonorGlobalCRM/1.0 (workforce ops; contact ops@staffhero.co)' } });
   if (!res.ok) return null;
   const hits = await res.json();
-  return hits.length ? { lat: Number(hits[0].lat), lon: Number(hits[0].lon) } : null;
+  // Never accept a sea/bay/coast feature — pick the first result that is an actual land place.
+  const isWater = h => h.class === 'water' ||
+    (h.class === 'natural' && /^(water|bay|sea|strait|cape|reef|shoal|spring|beach|peak|wetland)$/i.test(h.type || ''));
+  const good = (hits || []).find(h => !isWater(h));
+  return good ? { lat: Number(good.lat), lon: Number(good.lon) } : null;
 }
 
 // Addresses clearly outside the Philippines must never be force-placed on a PH map.
