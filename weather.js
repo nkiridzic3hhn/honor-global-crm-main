@@ -28,7 +28,7 @@ const YEL_PRECIP = 2.5;   // mm/h  moderate rain
 const YEL_WIND   = 25;    // km/h
 const RE_PING_HOURS = 3;  // if someone stays RED, don't re-ping more often than this
 const GEOCODE_DELAY_MS = 1100; // Nominatim asks for <= 1 req/sec
-const GEOCODE_VERSION = 5; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
+const GEOCODE_VERSION = 6; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
 
 let lastRun = null, lastCount = 0, running = false;
 export function weatherStatus() { return { lastRun, lastCount, running }; }
@@ -161,10 +161,13 @@ async function geocodeNominatim(q) {
   const res = await fetch(url, { headers: { 'User-Agent': 'HonorGlobalCRM/1.0 (workforce ops; contact ops@staffhero.co)' } });
   if (!res.ok) return null;
   const hits = await res.json();
-  // Never accept a sea/bay/coast feature — pick the first result that is an actual land place.
-  const isWater = h => h.class === 'water' ||
-    (h.class === 'natural' && /^(water|bay|sea|strait|cape|reef|shoal|spring|beach|peak|wetland)$/i.test(h.type || ''));
-  const good = (hits || []).find(h => !isWater(h));
+  // Never accept sea/bay/coast features, nor country/region centroids (e.g. "Philippines").
+  const isBad = h =>
+    h.class === 'water' ||
+    (h.class === 'natural' && /^(water|bay|sea|strait|cape|reef|shoal|spring|beach|peak|wetland)$/i.test(h.type || '')) ||
+    h.addresstype === 'country' || h.type === 'country' ||
+    (h.place_rank != null && Number(h.place_rank) <= 6);
+  const good = (hits || []).find(h => !isBad(h));
   return good ? { lat: Number(good.lat), lon: Number(good.lon) } : null;
 }
 
@@ -190,6 +193,9 @@ function barangayQueries(addr) {
   let meaningful = segs.filter(s => !/^\d/.test(s) && !UNIT.test(s));
   if (!meaningful.length) meaningful = segs;
   meaningful = meaningful.map(s => s.replace(/^(brgy\.?|barangay)\s+/i, '').trim()).filter(Boolean);
+  // Never query country-level / generic terms — they resolve to the country centroid (in the sea).
+  const GENERIC = /^(philippines|phil\.?|ph|pilipinas|republic of the philippines)$/i;
+  meaningful = meaningful.filter(s => !GENERIC.test(s));
   const out = [];
   const push = a => { const q = a.join(', '); if (q && !out.includes(q)) out.push(q); };
   const n = meaningful.length;
