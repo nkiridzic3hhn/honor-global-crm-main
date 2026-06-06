@@ -275,7 +275,7 @@ function pay(){
       </div>
     </div>
     <div id="multiResult"></div>
-    <div style="display:flex;justify-content:space-between;align-items:center"><div class="sec">Posted Weeks (newest first)</div><button class="btn sm" id="fixDates" style="margin-top:18px">Fix week order</button></div>
+    <div class="sec">Posted Weeks (newest first)</div>
     ${weeks.length?weeks.map((w,idx)=>weekCard(w,idx)).join(''):'<div class="empty">No payroll posted yet.</div>'}`;
   $('#up').onclick=async()=>{
     const f=$('#file').files[0]; if(!f){toast('Pick a file first');return;}
@@ -301,7 +301,6 @@ function pay(){
   };
   document.querySelectorAll('[data-pweek]').forEach(h=>h.onclick=()=>{const k=h.dataset.pweek;openWeek=openWeek===k?null:k;render();});
   document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async(ev)=>{ev.stopPropagation();if(!confirm('Delete this payroll week?'))return;await api('/payroll/'+encodeURIComponent(b.dataset.del),{method:'DELETE'});await refresh();render();});
-  const fd2=$('#fixDates'); if(fd2) fd2.onclick=async()=>{fd2.textContent='Fixing…';const r=await api('/payroll/fix-dates',{method:'POST'});await refresh();render();toast('Reordered '+(r.fixed||0)+' weeks');};
 }
 function weekCard(w,idx){
   const open=openWeek===w.period;
