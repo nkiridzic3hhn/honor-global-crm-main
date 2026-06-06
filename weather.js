@@ -28,7 +28,7 @@ const YEL_PRECIP = 2.5;   // mm/h  moderate rain
 const YEL_WIND   = 25;    // km/h
 const RE_PING_HOURS = 3;  // if someone stays RED, don't re-ping more often than this
 const GEOCODE_DELAY_MS = 1100; // Nominatim asks for <= 1 req/sec
-const GEOCODE_VERSION = (process.env.GEOCODER_API_KEY ? 100 : 0) + 9; // street-level when a geocoder key is set, town-level otherwise; either change forces a re-geocode
+const GEOCODE_VERSION = (process.env.GEOCODER_API_KEY ? 100 : 0) + 10; // street-level when a geocoder key is set, town-level otherwise; either change forces a re-geocode
 
 let lastRun = null, lastCount = 0, running = false;
 export function weatherStatus() { return { lastRun, lastCount, running }; }
@@ -192,21 +192,29 @@ async function geocodeLocationIQ(addr) {
 // Reads the full address and returns a precise point. Locked to a Philippines bounding box.
 const PHOTON_DELAY_MS = 300;
 async function geocodePhoton(addr) {
-  const q = String(addr).replace(/\s+/g, ' ').trim();
-  if (!q) return null;
-  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=en&bbox=116.9,4.6,126.6,21.2`;
-  const res = await fetch(url, { headers: { 'User-Agent': 'HonorGlobalCRM/1.0 (ops@staffhero.co)' } });
-  if (!res.ok) return null;
-  const d = await res.json();
-  const f = (d.features || [])[0];
-  if (!f || !f.geometry || !Array.isArray(f.geometry.coordinates)) return null;
-  const p = f.properties || {};
-  // Reject coarse / non-land results.
-  if (/^(country|state|sea|ocean|water)$/i.test(p.type || '')) return null;
-  if (p.countrycode && String(p.countrycode).toUpperCase() !== 'PH') return null;
-  const [lon, lat] = f.geometry.coordinates;
-  if (typeof lat !== 'number' || typeof lon !== 'number') return null;
-  return { lat, lon };
+  // Try cleaned "barangay, district, city" queries first (resolve to the real part of town),
+  // then the raw address as a last attempt.
+  const tries = [];
+  for (const q of barangayQueries(addr)) if (q) tries.push(q);
+  const raw = String(addr).replace(/\s+/g, ' ').trim();
+  if (raw && !tries.includes(raw)) tries.push(raw);
+  for (const q of tries.slice(0, 3)) {
+    let res;
+    try {
+      const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=1&lang=en&bbox=116.9,4.6,126.6,21.2`;
+      res = await fetch(url, { headers: { 'User-Agent': 'HonorGlobalCRM/1.0 (ops@staffhero.co)' } });
+    } catch (e) { continue; }
+    if (!res.ok) continue;
+    let d; try { d = await res.json(); } catch (e) { continue; }
+    const f = (d.features || [])[0];
+    if (!f || !f.geometry || !Array.isArray(f.geometry.coordinates)) continue;
+    const p = f.properties || {};
+    if (/^(country|state|sea|ocean|water)$/i.test(p.type || '')) continue;
+    if (p.countrycode && String(p.countrycode).toUpperCase() !== 'PH') continue;
+    const [lon, lat] = f.geometry.coordinates;
+    if (typeof lat === 'number' && typeof lon === 'number') return { lat, lon };
+  }
+  return null;
 }
 
 // Addresses clearly outside the Philippines must never be force-placed on a PH map.
