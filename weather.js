@@ -28,7 +28,7 @@ const YEL_PRECIP = 2.5;   // mm/h  moderate rain
 const YEL_WIND   = 25;    // km/h
 const RE_PING_HOURS = 3;  // if someone stays RED, don't re-ping more often than this
 const GEOCODE_DELAY_MS = 1100; // Nominatim asks for <= 1 req/sec
-const GEOCODE_VERSION = 6; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
+const GEOCODE_VERSION = 7; // bump this whenever geocoding logic changes; forces a one-time re-geocode of everyone
 
 let lastRun = null, lastCount = 0, running = false;
 export function weatherStatus() { return { lastRun, lastCount, running }; }
@@ -233,18 +233,17 @@ async function geocodeMissing() {
       continue;
     }
     const { names } = placeCandidates(r.location);
-    const nomQ = barangayQueries(r.location);
     let hit = null;
-    // 1) Try barangay/district-level lookup first so people land on their actual part of town.
-    for (const q of nomQ) {
-      try { hit = await geocodeNominatim(q); } catch (e) { console.error('[weather] nominatim err', e.message); }
-      await sleep(GEOCODE_DELAY_MS);
+    // 1) Fast, reliable town/city placement via Open-Meteo (no rate limit) — places the bulk instantly.
+    for (const n of names) {
+      try { hit = await geocodeOpenMeteo(n); } catch (e) { console.error('[weather] open-meteo err', e.message); }
       if (hit) break;
     }
-    // 2) Fall back to a city/town centre (Open-Meteo) only if the finer lookup found nothing.
+    // 2) Only the few that miss fall through to the rate-limited finer lookup.
     if (!hit) {
-      for (const n of names) {
-        try { hit = await geocodeOpenMeteo(n); } catch (e) { console.error('[weather] open-meteo err', e.message); }
+      for (const q of barangayQueries(r.location)) {
+        try { hit = await geocodeNominatim(q); } catch (e) { console.error('[weather] nominatim err', e.message); }
+        await sleep(GEOCODE_DELAY_MS);
         if (hit) break;
       }
     }
@@ -253,7 +252,7 @@ async function geocodeMissing() {
       okCount++;
     } else {
       missCount++;
-      console.log(`[weather] geocode MISS: ${r.name} | tried=[${nomQ.join(' | ')}] names=[${names.join(' | ')}]`);
+      console.log(`[weather] geocode MISS: ${r.name} | names=[${names.join(' | ')}] tried=[${barangayQueries(r.location).join(' | ')}]`);
       await logEvent('weather_geocode_miss', `Could not geocode "${r.location}" for ${r.name}`, { location: r.location });
     }
   }
